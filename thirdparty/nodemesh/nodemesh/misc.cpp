@@ -5,6 +5,12 @@
 #include <QDebug>
 #include <unordered_set>
 #include <unordered_map>
+#include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
+#include <CGAL/Polygon_mesh_processing/triangulate_faces.h>
+#include <nodemesh/cgalmesh.h>
+
+typedef CGAL::Exact_predicates_inexact_constructions_kernel InexactKernel;
+typedef CGAL::Surface_mesh<InexactKernel::Point_3> InexactMesh;
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -72,8 +78,21 @@ bool nodemesh::pointInTriangle(const QVector3D &a, const QVector3D &b, const QVe
     return r + t <= 1.0;
 }
 
-void nodemesh::triangulate(const std::vector<QVector3D> &vertices, const std::vector<std::vector<size_t>> &faces, std::vector<std::vector<size_t>> &triangles)
+bool nodemesh::triangulate(std::vector<QVector3D> &vertices, const std::vector<std::vector<size_t>> &faces, std::vector<std::vector<size_t>> &triangles)
 {
+    auto cgalMesh = buildCgalMesh<InexactKernel>(vertices, faces);
+    bool isSucceed = CGAL::Polygon_mesh_processing::triangulate_faces(*cgalMesh);
+    if (isSucceed) {
+        vertices.clear();
+        fetchFromCgalMesh<InexactKernel>(cgalMesh, vertices, triangles);
+        delete cgalMesh;
+        return true;
+    }
+    delete cgalMesh;
+    
+    // fallback to our own imeplementation
+
+    isSucceed = true;
     std::vector<std::vector<size_t>> rings;
     for (const auto &face: faces) {
         if (face.size() > 3) {
@@ -128,8 +147,10 @@ void nodemesh::triangulate(const std::vector<QVector3D> &vertices, const std::ve
             triangles.push_back(newFace);
         } else {
             qDebug() << "Triangulate failed, ring size:" << fillRing.size();
+            isSucceed = false;
         }
     }
+    return isSucceed;
 }
 
 void nodemesh::exportMeshAsObj(const std::vector<QVector3D> &vertices, const std::vector<std::vector<size_t>> &faces, const QString &filename, const std::set<size_t> *excludeFacesOfVertices)
