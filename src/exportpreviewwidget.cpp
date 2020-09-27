@@ -15,6 +15,8 @@ ExportPreviewWidget::ExportPreviewWidget(Document *document, QWidget *parent) :
     m_colorPreviewLabel(nullptr),
     m_spinnerWidget(nullptr)
 {
+    setWindowFlags(windowFlags() | Qt::WindowStaysOnTopHint);
+    
     QHBoxLayout *toolButtonLayout = new QHBoxLayout;
     toolButtonLayout->setSpacing(0);
     //toolButtonLayout->setContentsMargins(5, 10, 4, 0);
@@ -34,6 +36,7 @@ ExportPreviewWidget::ExportPreviewWidget(Document *document, QWidget *parent) :
     //QPushButton *regenerateButton = new QPushButton(QChar(fa::recycle));
     //initAwesomeButton(regenerateButton);
     QPushButton *regenerateButton = new QPushButton(tr("Regenerate"));
+    regenerateButton->hide();
     connect(this, &ExportPreviewWidget::regenerate, this, &ExportPreviewWidget::checkSpinner);
     connect(regenerateButton, &QPushButton::clicked, this, &ExportPreviewWidget::regenerate);
     
@@ -46,8 +49,10 @@ ExportPreviewWidget::ExportPreviewWidget(Document *document, QWidget *parent) :
     connect(m_saveButton, &QPushButton::clicked, this, [=]() {
         auto currentIndex = exportFormatSelectBox->currentIndex();
         if (0 == currentIndex) {
+            this->hide();
             emit saveAsGlb();
         } else if (1 == currentIndex) {
+            this->hide();
             emit saveAsFbx();
         }
     });

@@ -9,9 +9,9 @@
 #include <QImage>
 #include <cmath>
 #include <algorithm>
-#include <QOpenGLWidget>
+#include <QPolygon>
 #include "snapshot.h"
-#include "meshloader.h"
+#include "model.h"
 #include "meshgenerator.h"
 #include "theme.h"
 #include "texturegenerator.h"
@@ -25,9 +25,17 @@
 #include "jointnodetree.h"
 #include "skeletondocument.h"
 #include "combinemode.h"
+#include "polycount.h"
+#include "preferences.h"
+#include "paintmode.h"
+#include "proceduralanimation.h"
+#include "componentlayer.h"
+#include "clothforce.h"
 
 class MaterialPreviewsGenerator;
 class MotionsGenerator;
+class ScriptRunner;
+class MousePicker;
 
 class HistoryItem
 {
@@ -39,6 +47,8 @@ public:
 class Component
 {
 public:
+    static const float defaultClothStiffness;
+    static const size_t defaultClothIteration;
     Component()
     {
     }
@@ -56,10 +66,16 @@ public:
     QUuid linkToPartId;
     QUuid parentId;
     bool expanded = true;
-    CombineMode combineMode = CombineMode::Normal;
+    CombineMode combineMode = Preferences::instance().componentCombineMode();
     bool dirty = true;
     float smoothAll = 0.0;
     float smoothSeam = 0.0;
+    PolyCount polyCount = PolyCount::Original;
+    ComponentLayer layer = ComponentLayer::Body;
+    float clothStiffness = defaultClothStiffness;
+    ClothForce clothForce = ClothForce::Gravitational;
+    float clothOffset = 0.0f;
+    size_t clothIteration = defaultClothIteration;
     std::vector<QUuid> childrenIds;
     QString linkData() const
     {
@@ -179,6 +195,22 @@ public:
     {
         return smoothAllAdjusted() || smoothSeamAdjusted();
     }
+    bool clothStiffnessAdjusted() const
+    {
+        return fabs(clothStiffness - Component::defaultClothStiffness) >= 0.01;
+    }
+    bool clothIterationAdjusted() const
+    {
+        return clothIteration != defaultClothIteration;
+    }
+    bool clothForceAdjusted() const
+    {
+        return ClothForce::Gravitational != clothForce;
+    }
+    bool clothOffsetAdjusted() const
+    {
+        return fabs(clothOffset - 0.0) >= 0.01;
+    }
 private:
     std::set<QUuid> m_childrenIdSet;
 };
@@ -197,28 +229,34 @@ public:
     QString name;
     bool dirty = true;
     QUuid turnaroundImageId;
+    float yTranslationScale = 1.0;
     std::vector<std::pair<std::map<QString, QString>, std::map<QString, std::map<QString, QString>>>> frames; // pair<attributes, parameters>
-    void updatePreviewMesh(MeshLoader *previewMesh)
+    void updatePreviewMesh(Model *previewMesh)
     {
         delete m_previewMesh;
         m_previewMesh = previewMesh;
     }
-    MeshLoader *takePreviewMesh() const
+    Model *takePreviewMesh() const
     {
         if (nullptr == m_previewMesh)
             return nullptr;
-        return new MeshLoader(*m_previewMesh);
+        return new Model(*m_previewMesh);
+    }
+    bool yTranslationScaleAdjusted() const
+    {
+        return fabs(yTranslationScale - 1.0) >= 0.01;
     }
 private:
     Q_DISABLE_COPY(Pose);
-    MeshLoader *m_previewMesh = nullptr;
+    Model *m_previewMesh = nullptr;
 };
 
 enum class MotionClipType
 {
     Pose,
     Interpolation,
-    Motion
+    Motion,
+    ProceduralAnimation
 };
 
 class MotionClip
@@ -235,6 +273,9 @@ public:
         } else if ("InterpolationType" == linkDataType) {
             clipType = MotionClipType::Interpolation;
             interpolationType = InterpolationTypeFromString(linkData.toUtf8().constData());
+        } else if ("ProceduralAnimation" == linkDataType) {
+            clipType = MotionClipType::ProceduralAnimation;
+            proceduralAnimation = ProceduralAnimationFromString(linkData.toUtf8().constData());
         } else if ("motionId" == linkDataType) {
             clipType = MotionClipType::Motion;
             linkToId = QUuid(linkData);
@@ -246,6 +287,8 @@ public:
             return "poseId";
         if (MotionClipType::Interpolation == clipType)
             return "InterpolationType";
+        if (MotionClipType::ProceduralAnimation == clipType)
+            return "ProceduralAnimation";
         if (MotionClipType::Motion == clipType)
             return "motionId";
         return "poseId";
@@ -256,6 +299,8 @@ public:
             return linkToId.toString();
         if (MotionClipType::Interpolation == clipType)
             return InterpolationTypeToString(interpolationType);
+        if (MotionClipType::ProceduralAnimation == clipType)
+            return ProceduralAnimationToString(proceduralAnimation);
         if (MotionClipType::Motion == clipType)
             return linkToId.toString();
         return linkToId.toString();
@@ -264,6 +309,7 @@ public:
     MotionClipType clipType = MotionClipType::Pose;
     QUuid linkToId;
     InterpolationType interpolationType;
+    ProceduralAnimation proceduralAnimation;
 };
 
 class Motion
@@ -281,18 +327,18 @@ public:
     bool dirty = true;
     std::vector<MotionClip> clips;
     std::vector<std::pair<float, JointNodeTree>> jointNodeTrees;
-    void updatePreviewMeshs(std::vector<std::pair<float, MeshLoader *>> &previewMeshs)
+    void updatePreviewMeshs(std::vector<std::pair<float, Model *>> &previewMeshs)
     {
         releasePreviewMeshs();
         m_previewMeshs = previewMeshs;
         previewMeshs.clear();
     }
-    MeshLoader *takePreviewMesh() const
+    Model *takePreviewMesh() const
     {
         if (m_previewMeshs.empty())
             return nullptr;
         int middle = std::max((int)m_previewMeshs.size() / 2 - 1, (int)0);
-        return new MeshLoader(*m_previewMeshs[middle].second);
+        return new Model(*m_previewMeshs[middle].second);
     }
 private:
     Q_DISABLE_COPY(Motion);
@@ -303,7 +349,7 @@ private:
         }
         m_previewMeshs.clear();
     }
-    std::vector<std::pair<float, MeshLoader *>> m_previewMeshs;
+    std::vector<std::pair<float, Model *>> m_previewMeshs;
 };
 
 class MaterialMap
@@ -317,6 +363,7 @@ class MaterialLayer
 {
 public:
     std::vector<MaterialMap> maps;
+    float tileScale = 1.0;
 };
 
 class Material
@@ -333,20 +380,20 @@ public:
     QString name;
     bool dirty = true;
     std::vector<MaterialLayer> layers;
-    void updatePreviewMesh(MeshLoader *previewMesh)
+    void updatePreviewMesh(Model *previewMesh)
     {
         delete m_previewMesh;
         m_previewMesh = previewMesh;
     }
-    MeshLoader *takePreviewMesh() const
+    Model *takePreviewMesh() const
     {
         if (nullptr == m_previewMesh)
             return nullptr;
-        return new MeshLoader(*m_previewMesh);
+        return new Model(*m_previewMesh);
     }
 private:
     Q_DISABLE_COPY(Material);
-    MeshLoader *m_previewMesh = nullptr;
+    Model *m_previewMesh = nullptr;
 };
 
 enum class DocumentToSnapshotFor
@@ -373,20 +420,30 @@ signals:
     void componentExpandStateChanged(QUuid componentId);
     void componentSmoothAllChanged(QUuid componentId);
     void componentSmoothSeamChanged(QUuid componentId);
+    void componentPolyCountChanged(QUuid componentId);
+    void componentLayerChanged(QUuid componentId);
+    void componentClothStiffnessChanged(QUuid componentId);
+    void componentClothIterationChanged(QUuid componentId);
+    void componentClothForceChanged(QUuid componentId);
+    void componentClothOffsetChanged(QUuid componentId);
     void nodeRemoved(QUuid nodeId);
     void edgeRemoved(QUuid edgeId);
     void nodeRadiusChanged(QUuid nodeId);
     void nodeBoneMarkChanged(QUuid nodeId);
+    void nodeColorStateChanged(QUuid nodeId);
+    void nodeCutRotationChanged(QUuid nodeId);
+    void nodeCutFaceChanged(QUuid nodeId);
     void nodeOriginChanged(QUuid nodeId);
-    void edgeChanged(QUuid edgeId);
+    void edgeReversed(QUuid edgeId);
     void partPreviewChanged(QUuid partId);
     void resultMeshChanged();
     void turnaroundChanged();
     void editModeChanged();
+    void paintModeChanged();
     void skeletonChanged();
-    void resultSkeletonChanged();
+    //void resultSkeletonChanged();
     void resultTextureChanged();
-    void resultBakedTextureChanged();
+    //void resultBakedTextureChanged();
     void postProcessedResultChanged();
     void resultRigChanged();
     void rigChanged();
@@ -395,16 +452,26 @@ signals:
     void partSubdivStateChanged(QUuid partId);
     void partDisableStateChanged(QUuid partId);
     void partXmirrorStateChanged(QUuid partId);
-    void partZmirrorStateChanged(QUuid partId);
+    //void partZmirrorStateChanged(QUuid partId);
+    void partBaseChanged(QUuid partId);
     void partDeformThicknessChanged(QUuid partId);
     void partDeformWidthChanged(QUuid partId);
+    void partDeformMapImageIdChanged(QUuid partId);
+    void partDeformMapScaleChanged(QUuid partId);
     void partRoundStateChanged(QUuid partId);
     void partColorStateChanged(QUuid partId);
     void partCutRotationChanged(QUuid partId);
-    void partCutTemplateChanged(QUuid partId);
+    void partCutFaceChanged(QUuid partId);
     void partMaterialIdChanged(QUuid partId);
+    void partChamferStateChanged(QUuid partId);
+    void partTargetChanged(QUuid partId);
+    void partColorSolubilityChanged(QUuid partId);
+    void partHollowThicknessChanged(QUuid partId);
+    void partCountershadeStateChanged(QUuid partId);
+    void partGridStateChanged(QUuid partId);
     void componentCombineModeChanged(QUuid componentId);
     void cleanup();
+    void cleanupScript();
     void originChanged();
     void xlockStateChanged();
     void ylockStateChanged();
@@ -429,6 +496,7 @@ signals:
     void poseNameChanged(QUuid poseId);
     void poseFramesChanged(QUuid poseId);
     void poseTurnaroundImageIdChanged(QUuid poseId);
+    void poseYtranslationScaleChanged(QUuid poseId);
     void posePreviewChanged(QUuid poseId);
     void motionAdded(QUuid motionId);
     void motionRemoved(QUuid motionId);
@@ -447,6 +515,14 @@ signals:
     void postProcessing();
     void textureGenerating();
     void textureChanged();
+    void scriptChanged();
+    void scriptModifiedFromExternal();
+    void mergedVaraiblesChanged();
+    void scriptRunning();
+    void scriptErrorChanged();
+    void scriptConsoleLogChanged();
+    void mouseTargetChanged();
+    void mousePickRadiusChanged();
 public: // need initialize
     QImage *textureGuideImage;
     QImage *textureImage;
@@ -457,8 +533,10 @@ public: // need initialize
     QImage *textureMetalnessImage;
     QImage *textureRoughnessImage;
     QImage *textureAmbientOcclusionImage;
+    bool textureHasTransparencySettings;
     RigType rigType;
     bool weldEnabled;
+    PolyCount polyCount;
 public:
     Document();
     ~Document();
@@ -484,21 +562,26 @@ public:
         const std::set<QUuid> &limitMotionIds=std::set<QUuid>(),
         const std::set<QUuid> &limitMaterialIds=std::set<QUuid>()) const;
     void fromSnapshot(const Snapshot &snapshot);
-    void addFromSnapshot(const Snapshot &snapshot, bool fromPaste=true);
+    enum class SnapshotSource
+    {
+        Unknown,
+        Paste,
+        Import
+    };
+    void addFromSnapshot(const Snapshot &snapshot, enum SnapshotSource source=SnapshotSource::Paste);
     const Component *findComponent(QUuid componentId) const;
     const Component *findComponentParent(QUuid componentId) const;
     QUuid findComponentParentId(QUuid componentId) const;
     const Material *findMaterial(QUuid materialId) const;
     const Pose *findPose(QUuid poseId) const;
     const Motion *findMotion(QUuid motionId) const;
-    MeshLoader *takeResultMesh();
+    Model *takeResultMesh();
     bool isMeshGenerationSucceed();
-    MeshLoader *takeResultTextureMesh();
-    MeshLoader *takeResultRigWeightMesh();
+    Model *takeResultTextureMesh();
+    Model *takeResultRigWeightMesh();
     const std::vector<RiggerBone> *resultRigBones() const;
     const std::map<int, RiggerVertexWeights> *resultRigWeights() const;
     void updateTurnaround(const QImage &image);
-    void setSharedContextWidget(QOpenGLWidget *sharedContextWidget);
     bool hasPastableMaterialsInClipboard() const;
     bool hasPastablePosesInClipboard() const;
     bool hasPastableMotionsInClipboard() const;
@@ -511,6 +594,14 @@ public:
     const Outcome &currentRiggedOutcome() const;
     bool currentRigSucceed() const;
     bool isMeshGenerating() const;
+    bool isPostProcessing() const;
+    bool isTextureGenerating() const;
+    const QString &script() const;
+    const std::map<QString, std::map<QString, QString>> &variables() const;
+    const QString &scriptError() const;
+    const QString &scriptConsoleLog() const;
+    const QVector3D &mouseTargetPosition() const;
+    float mousePickRadius() const;
 public slots:
     void undo() override;
     void redo() override;
@@ -518,16 +609,26 @@ public slots:
     void removeNode(QUuid nodeId);
     void removeEdge(QUuid edgeId);
     void removePart(QUuid partId);
+    void addPartByPolygons(const QPolygonF &mainProfile, const QPolygonF &sideProfile, const QSizeF &canvasSize);
+    void addNodeWithId(QUuid nodeId, float x, float y, float z, float radius, QUuid fromNodeId);
     void addNode(float x, float y, float z, float radius, QUuid fromNodeId);
     void scaleNodeByAddRadius(QUuid nodeId, float amount);
     void moveNodeBy(QUuid nodeId, float x, float y, float z);
     void setNodeOrigin(QUuid nodeId, float x, float y, float z);
     void setNodeRadius(QUuid nodeId, float radius);
     void setNodeBoneMark(QUuid nodeId, BoneMark mark);
+    void setNodeCutRotation(QUuid nodeId, float cutRotation);
+    void setNodeCutFace(QUuid nodeId, CutFace cutFace);
+    void setNodeCutFaceLinkedId(QUuid nodeId, QUuid linkedId);
+    void clearNodeCutFaceSettings(QUuid nodeId);
     void switchNodeXZ(QUuid nodeId);
     void moveOriginBy(float x, float y, float z);
     void addEdge(QUuid fromNodeId, QUuid toNodeId);
     void setEditMode(SkeletonDocumentEditMode mode);
+    void setPaintMode(PaintMode mode);
+    void setMousePickRadius(float radius);
+    void createSinglePartFromEdges(const std::vector<QVector3D> &nodes,
+        const std::vector<std::pair<size_t, size_t>> &edges);
     void uiReady();
     void generateMesh();
     void regenerateMesh();
@@ -544,19 +645,31 @@ public slots:
     void materialPreviewsReady();
     void generateMotions();
     void motionsReady();
+    void pickMouseTarget(const QVector3D &nearPosition, const QVector3D &farPosition);
+    void doPickMouseTarget();
+    void mouseTargetReady();
     void setPartLockState(QUuid partId, bool locked);
     void setPartVisibleState(QUuid partId, bool visible);
     void setPartSubdivState(QUuid partId, bool subdived);
     void setPartDisableState(QUuid partId, bool disabled);
     void setPartXmirrorState(QUuid partId, bool mirrored);
-    void setPartZmirrorState(QUuid partId, bool mirrored);
+    //void setPartZmirrorState(QUuid partId, bool mirrored);
+    void setPartBase(QUuid partId, PartBase base);
     void setPartDeformThickness(QUuid partId, float thickness);
     void setPartDeformWidth(QUuid partId, float width);
+    void setPartDeformMapImageId(QUuid partId, QUuid imageId);
+    void setPartDeformMapScale(QUuid partId, float scale);
     void setPartRoundState(QUuid partId, bool rounded);
     void setPartColorState(QUuid partId, bool hasColor, QColor color);
     void setPartCutRotation(QUuid partId, float cutRotation);
-    void setPartCutTemplate(QUuid partId, std::vector<QVector2D> cutTemplate);
+    void setPartCutFace(QUuid partId, CutFace cutFace);
+    void setPartCutFaceLinkedId(QUuid partId, QUuid linkedId);
     void setPartMaterialId(QUuid partId, QUuid materialId);
+    void setPartChamferState(QUuid partId, bool chamfered);
+    void setPartTarget(QUuid partId, PartTarget target);
+    void setPartColorSolubility(QUuid partId, float solubility);
+    void setPartHollowThickness(QUuid partId, float hollowThickness);
+    void setPartCountershaded(QUuid partId, bool countershaded);
     void setComponentCombineMode(QUuid componentId, CombineMode combineMode);
     void moveComponentUp(QUuid componentId);
     void moveComponentDown(QUuid componentId);
@@ -572,10 +685,17 @@ public slots:
     void setComponentExpandState(QUuid componentId, bool expanded);
     void setComponentSmoothAll(QUuid componentId, float toSmoothAll);
     void setComponentSmoothSeam(QUuid componentId, float toSmoothSeam);
+    void setComponentPolyCount(QUuid componentId, PolyCount count);
+    void setComponentLayer(QUuid componentId, ComponentLayer layer);
+    void setComponentClothStiffness(QUuid componentId, float stiffness);
+    void setComponentClothIteration(QUuid componentId, size_t iteration);
+    void setComponentClothForce(QUuid componentId, ClothForce force);
+    void setComponentClothOffset(QUuid componentId, float offset);
     void hideOtherComponents(QUuid componentId);
     void lockOtherComponents(QUuid componentId);
     void hideAllComponents();
     void showAllComponents();
+    void showOrHideAllComponents();
     void collapseAllComponents();
     void expandAllComponents();
     void lockAllComponents();
@@ -588,9 +708,12 @@ public slots:
     void batchChangeBegin();
     void batchChangeEnd();
     void reset();
+    void resetScript();
     void clearHistories();
     void silentReset();
+    void silentResetScript();
     void breakEdge(QUuid edgeId);
+    void reverseEdge(QUuid edgeId);
     void setXlockState(bool locked);
     void setYlockState(bool locked);
     void setZlockState(bool locked);
@@ -601,10 +724,12 @@ public slots:
     void enableWeld(bool enabled);
     void setRigType(RigType toRigType);
     void addPose(QUuid poseId, QString name, std::vector<std::pair<std::map<QString, QString>, std::map<QString, std::map<QString, QString>>>> frames,
-        QUuid turnaroundImageId);
+        QUuid turnaroundImageId,
+        float yTranslationScale);
     void removePose(QUuid poseId);
     void setPoseFrames(QUuid poseId, std::vector<std::pair<std::map<QString, QString>, std::map<QString, std::map<QString, QString>>>> frames);
     void setPoseTurnaroundImageId(QUuid poseId, QUuid imageId);
+    void setPoseYtranslationScale(QUuid poseId, float scale);
     void renamePose(QUuid poseId, QString name);
     void addMotion(QUuid motionId, QString name, std::vector<MotionClip> clips);
     void removeMotion(QUuid motionId);
@@ -614,12 +739,24 @@ public slots:
     void removeMaterial(QUuid materialId);
     void setMaterialLayers(QUuid materialId, std::vector<MaterialLayer> layers);
     void renameMaterial(QUuid materialId, QString name);
+    void applyPreferencePartColorChange();
+    void applyPreferenceFlatShadingChange();
+    void applyPreferenceTextureSizeChange();
+    void initScript(const QString &script);
+    void updateScript(const QString &script);
+    void runScript();
+    void scriptResultReady();
+    void updateVariable(const QString &name, const std::map<QString, QString> &value);
+    void updateVariableValue(const QString &name, const QString &value);
+    void startPaint(void);
+    void stopPaint(void);
+    void setMousePickMaskNodeIds(const std::set<QUuid> &nodeIds);
 private:
     void splitPartByNode(std::vector<std::vector<QUuid>> *groups, QUuid nodeId);
     void joinNodeAndNeiborsToGroup(std::vector<QUuid> *group, QUuid nodeId, std::set<QUuid> *visitMap, QUuid noUseEdgeId=QUuid());
     void splitPartByEdge(std::vector<std::vector<QUuid>> *groups, QUuid edgeId);
     bool isPartReadonly(QUuid partId) const;
-    QUuid createNode(float x, float y, float z, float radius, QUuid fromNodeId);
+    QUuid createNode(QUuid nodeId, float x, float y, float z, float radius, QUuid fromNodeId);
     void settleOrigin();
     void checkExportReadyState();
     void removePartDontCareComponent(QUuid partId);
@@ -629,10 +766,16 @@ private:
     void resetDirtyFlags();
     void markAllDirty();
     void removeRigResults();
+    void updateLinkedPart(QUuid oldPartId, QUuid newPartId);
+    //void addToolToMesh(Model *mesh);
+    bool updateDefaultVariables(const std::map<QString, std::map<QString, QString>> &defaultVariables);
+    void checkPartGrid(QUuid partId);
 private: // need initialize
     bool m_isResultMeshObsolete;
     MeshGenerator *m_meshGenerator;
-    MeshLoader *m_resultMesh;
+    Model *m_resultMesh;
+    std::map<QUuid, StrokeMeshBuilder::CutFaceTransform> *m_resultMeshCutFaceTransforms;
+    std::map<QUuid, std::map<QString, QVector2D>> *m_resultMeshNodesCutFaces;
     bool m_isMeshGenerationSucceed;
     int m_batchChangeRefCount;
     Outcome *m_currentOutcome;
@@ -641,14 +784,13 @@ private: // need initialize
     bool m_isPostProcessResultObsolete;
     MeshResultPostProcessor *m_postProcessor;
     Outcome *m_postProcessedOutcome;
-    MeshLoader *m_resultTextureMesh;
+    Model *m_resultTextureMesh;
     unsigned long long m_textureImageUpdateVersion;
-    QOpenGLWidget *m_sharedContextWidget;
     QUuid m_currentCanvasComponentId;
     bool m_allPositionRelatedLocksEnabled;
     bool m_smoothNormal;
     RigGenerator *m_rigGenerator;
-    MeshLoader *m_resultRigWeightMesh;
+    Model *m_resultRigWeightMesh;
     std::vector<RiggerBone> *m_resultRigBones;
     std::map<int, RiggerVertexWeights> *m_resultRigWeights;
     bool m_isRigObsolete;
@@ -657,12 +799,31 @@ private: // need initialize
     bool m_currentRigSucceed;
     MaterialPreviewsGenerator *m_materialPreviewsGenerator;
     MotionsGenerator *m_motionsGenerator;
+    quint64 m_meshGenerationId;
+    quint64 m_nextMeshGenerationId;
+    std::map<QString, std::map<QString, QString>> m_cachedVariables;
+    std::map<QString, std::map<QString, QString>> m_mergedVariables;
+    ScriptRunner *m_scriptRunner;
+    bool m_isScriptResultObsolete;
+    MousePicker *m_mousePicker;
+    bool m_isMouseTargetResultObsolete;
+    PaintMode m_paintMode;
+    float m_mousePickRadius;
+    bool m_saveNextPaintSnapshot;
 private:
     static unsigned long m_maxSnapshot;
     std::deque<HistoryItem> m_undoItems;
     std::deque<HistoryItem> m_redoItems;
     GeneratedCacheContext m_generatedCacheContext;
     std::vector<std::pair<QtMsgType, QString>> m_resultRigMessages;
+    QVector3D m_mouseRayNear;
+    QVector3D m_mouseRayFar;
+    QVector3D m_mouseTargetPosition;
+    QString m_scriptError;
+    QString m_scriptConsoleLog;
+    QString m_script;
+    std::set<QUuid> m_mousePickMaskNodeIds;
+    std::set<QUuid> m_intermediatePaintImageIds;
 };
 
 #endif

@@ -18,11 +18,18 @@ signals:
     void setPartZmirrorState(QUuid partId, bool mirrored);
     void setPartDeformThickness(QUuid partId, float thickness);
     void setPartDeformWidth(QUuid partId, float width);
+    void setPartDeformMapImageId(QUuid partId, QUuid imageId);
+    void setPartDeformMapScale(QUuid partId, float scale);
     void setPartRoundState(QUuid partId, bool rounded);
+    void setPartChamferState(QUuid partId, bool chamfered);
     void setPartColorState(QUuid partId, bool hasColor, QColor color);
     void setPartCutRotation(QUuid partId, float cutRotation);
-    void setPartCutTemplate(QUuid partId, std::vector<QVector2D> cutTemplate);
+    void setPartCutFace(QUuid partId, CutFace cutFace);
+    void setPartCutFaceLinkedId(QUuid partId, QUuid linkedId);
     void setPartMaterialId(QUuid partId, QUuid materialId);
+    void setPartColorSolubility(QUuid partId, float colorSolubility);
+    void setPartHollowThickness(QUuid partId, float hollowThickness);
+    void setPartCountershaded(QUuid partId, bool countershaded);
     void movePartUp(QUuid partId);
     void movePartDown(QUuid partId);
     void movePartToTop(QUuid partId);
@@ -43,19 +50,18 @@ public:
     void updateZmirrorButton();
     void updateDeformButton();
     void updateRoundButton();
+    void updateChamferButton();
     void updateColorButton();
     void updateCutRotationButton();
-    void updateCutTemplateButton();
     void updateCheckedState(bool checked);
     void updateUnnormalState(bool unnormal);
     static QSize preferredSize();
     ModelWidget *previewWidget();
 protected:
-    void mouseDoubleClickEvent(QMouseEvent *event) override;
+    //void mouseDoubleClickEvent(QMouseEvent *event) override;
 public slots:
     void showDeformSettingPopup(const QPoint &pos);
     void showCutRotationSettingPopup(const QPoint &pos);
-    void showCutTemplateSettingPopup(const QPoint &pos);
     void showColorSettingPopup(const QPoint &pos);
 private: // need initialize
     const Document *m_document;
@@ -71,15 +77,15 @@ private:
     QPushButton *m_zMirrorButton;
     QPushButton *m_deformButton;
     QPushButton *m_roundButton;
+    QPushButton *m_chamferButton;
     QPushButton *m_colorButton;
     QPushButton *m_cutRotationButton;
-    QPushButton *m_cutTemplateButton;
     QWidget *m_backgroundWidget;
 private:
     void initToolButton(QPushButton *button);
     void initToolButtonWithoutFont(QPushButton *button);
     void initButton(QPushButton *button);
-    void updateButton(QPushButton *button, QChar icon, bool highlighted);
+    void updateButton(QPushButton *button, QChar icon, bool highlighted, bool enabled=true);
     void updateAllButtons();
 };
 

@@ -8,6 +8,7 @@
 #include <QMessageBox>
 #include <QFileDialog>
 #include <QSpinBox>
+#include <QSlider>
 #include "theme.h"
 #include "poseeditwidget.h"
 #include "floatnumberwidget.h"
@@ -18,11 +19,15 @@
 #include "shortcuts.h"
 #include "imageforever.h"
 
+float PoseEditWidget::m_defaultBlur = 0.5;
+
 PoseEditWidget::PoseEditWidget(const Document *document, QWidget *parent) :
     QDialog(parent),
     m_document(document),
     m_poseDocument(new PoseDocument)
 {
+    setWindowFlags(windowFlags() | Qt::WindowStaysOnTopHint);
+    
     m_posePreviewManager = new PosePreviewManager();
     connect(m_posePreviewManager, &PosePreviewManager::renderDone, [=]() {
         if (m_closed) {
@@ -38,7 +43,7 @@ PoseEditWidget::PoseEditWidget(const Document *document, QWidget *parent) :
     
     SkeletonGraphicsWidget *graphicsWidget = new SkeletonGraphicsWidget(m_poseDocument);
     graphicsWidget->setNodePositionModifyOnly(true);
-    graphicsWidget->setBackgroundBlur(0.5);
+    graphicsWidget->setBackgroundBlur(m_defaultBlur);
     m_poseGraphicsWidget = graphicsWidget;
     
     initShortCuts(this, graphicsWidget);
@@ -52,11 +57,11 @@ PoseEditWidget::PoseEditWidget(const Document *document, QWidget *parent) :
     containerWidget->setLayout(containerLayout);
     containerWidget->setMinimumSize(400, 400);
     
-    m_previewWidget = new ModelWidget(containerWidget);
-    m_previewWidget->setAttribute(Qt::WA_TransparentForMouseEvents);
-    m_previewWidget->setMinimumSize(DocumentWindow::m_modelRenderWidgetInitialSize, DocumentWindow::m_modelRenderWidgetInitialSize);
-    m_previewWidget->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Minimum);
-    m_previewWidget->move(DocumentWindow::m_modelRenderWidgetInitialX, DocumentWindow::m_modelRenderWidgetInitialY);
+    m_previewWidget = new ModelWidget(this);
+    m_previewWidget->setFixedSize(384, 384);
+    m_previewWidget->enableMove(true);
+    m_previewWidget->enableZoom(false);
+    m_previewWidget->move(-64, 0);
     
     m_poseGraphicsWidget->setModelWidget(m_previewWidget);
     containerWidget->setModelWidget(m_previewWidget);
@@ -77,6 +82,7 @@ PoseEditWidget::PoseEditWidget(const Document *document, QWidget *parent) :
     connect(m_poseDocument, &PoseDocument::nodeAdded, graphicsWidget, &SkeletonGraphicsWidget::nodeAdded);
     connect(m_poseDocument, &PoseDocument::edgeAdded, graphicsWidget, &SkeletonGraphicsWidget::edgeAdded);
     connect(m_poseDocument, &PoseDocument::nodeOriginChanged, graphicsWidget, &SkeletonGraphicsWidget::nodeOriginChanged);
+    connect(m_poseDocument, &PoseDocument::partVisibleStateChanged, graphicsWidget, &SkeletonGraphicsWidget::partVisibleStateChanged);
     
     connect(m_poseDocument, &PoseDocument::parametersChanged, this, [&]() {
         m_currentParameters.clear();
@@ -85,8 +91,89 @@ PoseEditWidget::PoseEditWidget(const Document *document, QWidget *parent) :
         emit parametersAdjusted();
     });
     
+    QSlider *opacitySlider = new QSlider(Qt::Horizontal);
+    opacitySlider->setFixedWidth(100);
+    opacitySlider->setMaximum(10);
+    opacitySlider->setMinimum(0);
+    opacitySlider->setValue(m_defaultBlur * 10);
+
+    connect(opacitySlider, &QSlider::valueChanged, this, [=](int value) {
+        graphicsWidget->setBackgroundBlur((float)value / 10);
+    });
+    
+    auto updateSideVisibleButtonState = [=](QPushButton *button, SkeletonSide side) {
+        this->updateSideButtonState(button, m_poseDocument->isSideVisible(side));
+    };
+    
+    QPushButton *leftSideVisibleButton = new QPushButton(QChar('L'));
+    leftSideVisibleButton->setToolTip(tr("Toggle Left Side Visibility"));
+    initSideButton(leftSideVisibleButton);
+    updateSideVisibleButtonState(leftSideVisibleButton, SkeletonSide::Left);
+    connect(leftSideVisibleButton, &QPushButton::clicked, this, [=]() {
+        m_poseDocument->setSideVisiableState(SkeletonSide::Left, !m_poseDocument->isSideVisible(SkeletonSide::Left));
+    });
+    
+    QPushButton *middleSideVisibleButton = new QPushButton(QChar('M'));
+    middleSideVisibleButton->setToolTip(tr("Toggle Middle Side Visibility"));
+    initSideButton(middleSideVisibleButton);
+    updateSideVisibleButtonState(middleSideVisibleButton, SkeletonSide::None);
+    connect(middleSideVisibleButton, &QPushButton::clicked, this, [=]() {
+        m_poseDocument->setSideVisiableState(SkeletonSide::None, !m_poseDocument->isSideVisible(SkeletonSide::None));
+    });
+    
+    QPushButton *rightSideVisibleButton = new QPushButton(QChar('R'));
+    rightSideVisibleButton->setToolTip(tr("Toggle Right Side Visibility"));
+    initSideButton(rightSideVisibleButton);
+    updateSideVisibleButtonState(rightSideVisibleButton, SkeletonSide::Right);
+    connect(rightSideVisibleButton, &QPushButton::clicked, this, [=]() {
+        m_poseDocument->setSideVisiableState(SkeletonSide::Right, !m_poseDocument->isSideVisible(SkeletonSide::Right));
+    });
+    
+    connect(m_poseDocument, &PoseDocument::sideVisibleStateChanged, this, [=](SkeletonSide side) {
+        switch (side) {
+        case SkeletonSide::Left:
+            updateSideVisibleButtonState(leftSideVisibleButton, side);
+            break;
+        case SkeletonSide::None:
+            updateSideVisibleButtonState(middleSideVisibleButton, side);
+            break;
+        case SkeletonSide::Right:
+            updateSideVisibleButtonState(rightSideVisibleButton, side);
+            break;
+        }
+    });
+    
+    QHBoxLayout *sideButtonLayout = new QHBoxLayout;
+    sideButtonLayout->setSpacing(0);
+    sideButtonLayout->addStretch();
+    sideButtonLayout->addWidget(rightSideVisibleButton);
+    sideButtonLayout->addWidget(middleSideVisibleButton);
+    sideButtonLayout->addWidget(leftSideVisibleButton);
+    sideButtonLayout->addStretch();
+
+    QHBoxLayout *sliderLayout = new QHBoxLayout;
+    sliderLayout->addStretch();
+    sliderLayout->addSpacing(50);
+    sliderLayout->addWidget(new QLabel(tr("Dark")));
+    sliderLayout->addWidget(opacitySlider);
+    sliderLayout->addWidget(new QLabel(tr("Bright")));
+    sliderLayout->addSpacing(50);
+    sliderLayout->addStretch();
+    
+    QVBoxLayout *previewLayout = new QVBoxLayout;
+    previewLayout->addStretch();
+    previewLayout->addLayout(sideButtonLayout);
+    previewLayout->addLayout(sliderLayout);
+    previewLayout->addSpacing(20);
+    
     QHBoxLayout *paramtersLayout = new QHBoxLayout;
     paramtersLayout->addWidget(containerWidget);
+    
+    QHBoxLayout *topLayout = new QHBoxLayout;
+    topLayout->addLayout(previewLayout);
+    topLayout->addWidget(Theme::createVerticalLineWidget());
+    topLayout->addLayout(paramtersLayout);
+    topLayout->setStretch(2, 1);
     
     m_nameEdit = new QLineEdit;
     m_nameEdit->setFixedWidth(200);
@@ -108,6 +195,11 @@ PoseEditWidget::PoseEditWidget(const Document *document, QWidget *parent) :
     QPushButton *saveButton = new QPushButton(tr("Save"));
     connect(saveButton, &QPushButton::clicked, this, &PoseEditWidget::save);
     saveButton->setDefault(true);
+    
+    QPushButton *setPoseSettingButton = new QPushButton(Theme::awesome()->icon(fa::gear), tr(""));
+    connect(setPoseSettingButton, &QPushButton::clicked, this, [=]() {
+        showPoseSettingPopup(mapFromGlobal(QCursor::pos()));
+    });
     
     QPushButton *changeReferenceSheet = new QPushButton(tr("Change Reference Sheet..."));
     connect(changeReferenceSheet, &QPushButton::clicked, this, &PoseEditWidget::changeTurnaround);
@@ -176,11 +268,12 @@ PoseEditWidget::PoseEditWidget(const Document *document, QWidget *parent) :
     baseInfoLayout->addWidget(new QLabel(tr("Duration")));
     baseInfoLayout->addWidget(m_durationEdit);
     baseInfoLayout->addStretch();
+    baseInfoLayout->addWidget(setPoseSettingButton);
     baseInfoLayout->addWidget(changeReferenceSheet);
     baseInfoLayout->addWidget(saveButton);
     
     QVBoxLayout *mainLayout = new QVBoxLayout;
-    mainLayout->addLayout(paramtersLayout);
+    mainLayout->addLayout(topLayout);
     mainLayout->addWidget(Theme::createHorizontalLineWidget());
     mainLayout->addLayout(timelineLayout);
     mainLayout->addLayout(baseInfoLayout);
@@ -195,11 +288,70 @@ PoseEditWidget::PoseEditWidget(const Document *document, QWidget *parent) :
     connect(this, &PoseEditWidget::renamePose, m_document, &Document::renamePose);
     connect(this, &PoseEditWidget::setPoseFrames, m_document, &Document::setPoseFrames);
     connect(this, &PoseEditWidget::setPoseTurnaroundImageId, m_document, &Document::setPoseTurnaroundImageId);
+    connect(this, &PoseEditWidget::setPoseYtranslationScale, m_document, &Document::setPoseYtranslationScale);
     
     updatePoseDocument();
     updateTitle();
     updateFramesSettingButton();
     m_poseDocument->saveHistoryItem();
+}
+
+void PoseEditWidget::initSideButton(QPushButton *button)
+{
+    QFont font;
+    font.setWeight(QFont::Light);
+    font.setPixelSize(Theme::toolIconFontSize);
+    font.setBold(false);
+
+    button->setFont(font);
+    button->setFixedSize(Theme::toolIconSize, Theme::toolIconSize);
+    button->setStyleSheet("QPushButton {color: #f7d9c8}");
+    button->setFocusPolicy(Qt::NoFocus);
+}
+
+void PoseEditWidget::updateSideButtonState(QPushButton *button, bool visible)
+{
+    if (visible)
+        button->setStyleSheet("QPushButton {color: #f7d9c8}");
+    else
+        button->setStyleSheet("QPushButton {color: #252525}");
+}
+
+void PoseEditWidget::showPoseSettingPopup(const QPoint &pos)
+{
+    QMenu popupMenu;
+    
+    QWidget *popup = new QWidget;
+    
+    FloatNumberWidget *yTranslationScaleWidget = new FloatNumberWidget;
+    yTranslationScaleWidget->setItemName(tr("Height Adjustment Scale"));
+    yTranslationScaleWidget->setRange(0, 1);
+    yTranslationScaleWidget->setValue(m_yTranslationScale);
+    
+    connect(yTranslationScaleWidget, &FloatNumberWidget::valueChanged, [&](float value) {
+        m_yTranslationScale = value;
+        setUnsaveState();
+    });
+    
+    QPushButton *yTranslationScaleEraser = new QPushButton(QChar(fa::eraser));
+    Theme::initAwesomeToolButton(yTranslationScaleEraser);
+    
+    connect(yTranslationScaleEraser, &QPushButton::clicked, [=]() {
+        yTranslationScaleWidget->setValue(1.0);
+    });
+    
+    QHBoxLayout *yTranslationScaleLayout = new QHBoxLayout;
+    yTranslationScaleLayout->addWidget(yTranslationScaleEraser);
+    yTranslationScaleLayout->addWidget(yTranslationScaleWidget);
+    
+    popup->setLayout(yTranslationScaleLayout);
+    
+    QWidgetAction *action = new QWidgetAction(this);
+    action->setDefaultWidget(popup);
+    
+    popupMenu.addAction(action);
+    
+    popupMenu.exec(mapToGlobal(pos));
 }
 
 void PoseEditWidget::showFramesSettingPopup(const QPoint &pos)
@@ -209,13 +361,13 @@ void PoseEditWidget::showFramesSettingPopup(const QPoint &pos)
     QWidget *popup = new QWidget;
     
     QSpinBox *framesEdit = new QSpinBox();
-    framesEdit->setMaximum(60);
+    framesEdit->setMaximum(m_frames.size());
     framesEdit->setMinimum(1);
     framesEdit->setSingleStep(1);
     framesEdit->setValue(m_frames.size());
     
     connect(framesEdit, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), this, [=](int value) {
-        setFrameCount(value);
+        setCurrentFrame(value);
     });
     
     QFormLayout *formLayout = new QFormLayout;
@@ -253,21 +405,6 @@ void PoseEditWidget::syncFrameFromCurrent()
     ensureEnoughFrames();
     m_frames[m_currentFrame] = {m_currentAttributes, m_currentParameters};
     updateFramesDurations();
-}
-
-void PoseEditWidget::setFrameCount(int count)
-{
-    if (count == (int)m_frames.size())
-        return;
-    
-    setUnsaveState();
-    count = std::max(count, 1);
-    m_frames.resize(count);
-    updateFramesDurations();
-    updateFramesSettingButton();
-    if (m_currentFrame >= count) {
-        setCurrentFrame(count - 1);
-    }
 }
 
 void PoseEditWidget::updateFramesDurations()
@@ -382,7 +519,8 @@ void PoseEditWidget::closeEvent(QCloseEvent *event)
         QMessageBox::StandardButton answer = QMessageBox::question(this,
             APP_NAME,
             tr("Do you really want to close while there are unsaved changes?"),
-            QMessageBox::Yes | QMessageBox::No);
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
         if (answer != QMessageBox::Yes) {
             event->ignore();
             return;
@@ -498,6 +636,11 @@ void PoseEditWidget::setEditPoseTurnaroundImageId(QUuid imageId)
     m_poseDocument->updateTurnaround(*image);
 }
 
+void PoseEditWidget::setEditPoseYtranslationScale(float yTranslationScale)
+{
+    m_yTranslationScale = yTranslationScale;
+}
+
 void PoseEditWidget::clearUnsaveState()
 {
     m_unsaved = false;
@@ -514,11 +657,12 @@ void PoseEditWidget::save()
 {
     if (m_poseId.isNull()) {
         m_poseId = QUuid::createUuid();
-        emit addPose(m_poseId, m_nameEdit->text(), m_frames, m_imageId);
+        emit addPose(m_poseId, m_nameEdit->text(), m_frames, m_imageId, m_yTranslationScale);
     } else if (m_unsaved) {
         emit renamePose(m_poseId, m_nameEdit->text());
         emit setPoseFrames(m_poseId, m_frames);
         emit setPoseTurnaroundImageId(m_poseId, m_imageId);
+        emit setPoseYtranslationScale(m_poseId, m_yTranslationScale);
     }
     clearUnsaveState();
 }

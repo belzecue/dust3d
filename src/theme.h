@@ -5,6 +5,7 @@
 #include <map>
 #include <QPushButton>
 #include <QLabel>
+#include <QCheckBox>
 #include "QtAwesome.h"
 
 class Theme
@@ -35,6 +36,7 @@ public:
     static int toolIconFontSize;
     static int toolIconSize;
     static int materialPreviewImageSize;
+    static int cutFacePreviewImageSize;
     static int posePreviewImageSize;
     static int partPreviewImageSize;
     static int motionPreviewImageSize;
@@ -47,11 +49,12 @@ public:
     static void initAwesomeLabel(QLabel *label);
     static void initAwesomeSmallButton(QPushButton *button);
     static void initAwesomeMiniButton(QPushButton *button);
-    static void updateAwesomeMiniButton(QPushButton *button, QChar icon, bool highlighted, bool unnormal=false);
+    static void updateAwesomeMiniButton(QPushButton *button, QChar icon, bool highlighted, bool enabled, bool unnormal=false);
     static void initAwesomeToolButton(QPushButton *button);
     static void initAwesomeToolButtonWithoutFont(QPushButton *button);
     static void initAwsomeBaseSizes();
     static void initToolButton(QPushButton *button);
+    static void initCheckbox(QCheckBox *checkbox);
 };
 
 #endif

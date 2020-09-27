@@ -29,6 +29,21 @@ void JointNodeTree::reset()
     }
 }
 
+void JointNodeTree::calculateBonePositions(std::vector<std::pair<QVector3D, QVector3D>> *bonePositions,
+    const JointNodeTree *jointNodeTree,
+    const std::vector<RiggerBone> *rigBones) const
+{
+    if (nullptr == bonePositions || nullptr == jointNodeTree || nullptr == rigBones)
+        return;
+    
+    (*bonePositions).resize(jointNodeTree->nodes().size());
+    for (int i = 0; i < (int)jointNodeTree->nodes().size(); i++) {
+        const auto &node = jointNodeTree->nodes()[i];
+        (*bonePositions)[i] = std::make_pair(node.transformMatrix * node.position,
+            node.transformMatrix * (node.position + ((*rigBones)[i].tailPosition - (*rigBones)[i].headPosition)));
+    }
+}
+
 void JointNodeTree::recalculateTransformMatrices()
 {
     for (decltype(m_boneNodes.size()) i = 0; i < m_boneNodes.size(); i++) {

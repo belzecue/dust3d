@@ -36,7 +36,7 @@ install:
   # (Linux) First install a maybe old version CGAL to resolve dependencies
   - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sudo apt-get install libcgal-dev; fi
 
-  # (Linux) Build from source
+  # (Linux) Build CGAL from source
   - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then wget https://github.com/CGAL/cgal/releases/download/releases/CGAL-4.13/CGAL-4.13.zip; fi
   - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then unzip CGAL-4.13.zip; fi
   - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then cd CGAL-4.13; fi
@@ -46,6 +46,14 @@ install:
   - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then make; fi
   - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sudo make install; fi
   - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then cd ../../; fi
+
+  # Build Instant-Meshes from source
+  - cd thirdparty/instant-meshes
+  - mkdir build
+  - cd build
+  - cmake ../
+  - make -j 4
+  - cd ../../../
 
   # (Mac) Install Qt5
   - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then HOMEBREW_VERBOSE_USING_DOTS=1 brew reinstall --verbose qt; fi
@@ -69,6 +77,26 @@ script:
   - export BRANCH="$TRAVIS_BRANCH"
   - if [[ "$BRANCH" == "$TAG" ]]; then export BRANCH=master; fi
 
+  # (Mac) Test
+  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then dust3d.app/Contents/MacOS/dust3d :/resources/model-addax.ds3 -o addax.obj || travis_terminate 1; fi
+  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then dust3d.app/Contents/MacOS/dust3d :/resources/model-addax.ds3 -o addax.glb || travis_terminate 1; fi
+  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then dust3d.app/Contents/MacOS/dust3d :/resources/model-addax.ds3 -o addax.fbx || travis_terminate 1; fi
+  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then dust3d.app/Contents/MacOS/dust3d :/resources/model-bicycle.ds3 -o bicycle.obj || travis_terminate 1; fi
+  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then dust3d.app/Contents/MacOS/dust3d :/resources/model-bicycle.ds3 -o bicycle.glb || travis_terminate 1; fi
+  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then dust3d.app/Contents/MacOS/dust3d :/resources/model-bicycle.ds3 -o bicycle.fbx || travis_terminate 1; fi
+  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then dust3d.app/Contents/MacOS/dust3d :/resources/model-bob.ds3 -o bob.obj || travis_terminate 1; fi
+  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then dust3d.app/Contents/MacOS/dust3d :/resources/model-bob.ds3 -o bob.glb || travis_terminate 1; fi
+  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then dust3d.app/Contents/MacOS/dust3d :/resources/model-bob.ds3 -o bob.fbx || travis_terminate 1; fi
+  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then dust3d.app/Contents/MacOS/dust3d :/resources/model-dog.ds3 -o dog.obj || travis_terminate 1; fi
+  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then dust3d.app/Contents/MacOS/dust3d :/resources/model-dog.ds3 -o dog.glb || travis_terminate 1; fi
+  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then dust3d.app/Contents/MacOS/dust3d :/resources/model-dog.ds3 -o dog.fbx || travis_terminate 1; fi
+  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then dust3d.app/Contents/MacOS/dust3d :/resources/model-meerkat.ds3 -o meerkat.obj || travis_terminate 1; fi
+  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then dust3d.app/Contents/MacOS/dust3d :/resources/model-meerkat.ds3 -o meerkat.glb || travis_terminate 1; fi
+  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then dust3d.app/Contents/MacOS/dust3d :/resources/model-meerkat.ds3 -o meerkat.fbx || travis_terminate 1; fi
+  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then dust3d.app/Contents/MacOS/dust3d :/resources/model-mosquito.ds3 -o mosquito.obj || travis_terminate 1; fi
+  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then dust3d.app/Contents/MacOS/dust3d :/resources/model-mosquito.ds3 -o mosquito.glb || travis_terminate 1; fi
+  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then dust3d.app/Contents/MacOS/dust3d :/resources/model-mosquito.ds3 -o mosquito.fbx || travis_terminate 1; fi
+
   # (Mac) Prepare dmg
   - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then mv dust3d.app dust3d-$TAG.app || travis_terminate 1; fi
   - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then macdeployqt dust3d-$TAG.app -dmg || travis_terminate 1; fi
@@ -90,7 +118,7 @@ script:
   - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sudo ls /usr/lib/x86_64-linux-gnu/ | grep libstdc; fi
   - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then cp /usr/lib/x86_64-linux-gnu/libstdc++.so.6 appdir/usr/optional/libstdc++/libstdc++.so.6 || travis_terminate 1; fi
   - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then cp ./ci/exec-x86_64.so appdir/usr/optional/exec.so || travis_terminate 1; fi
-  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then cp ./ci/icon.png appdir/icon.png || travis_terminate 1; fi
+  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then cp ./ci/dust3d.png appdir/dust3d.png || travis_terminate 1; fi
   - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then cp ./ci/dust3d.appdata.xml appdir/usr/share/metainfo/dust3d.appdata.xml || travis_terminate 1; fi
   - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then cp ./dust3d appdir/usr/bin/dust3d || travis_terminate 1; fi
   - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then cp ./ci/dust3d.desktop appdir/usr/share/applications/dust3d.desktop || travis_terminate 1; fi
@@ -103,10 +131,10 @@ script:
   - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then ./ci/linuxdeployqt.AppImage --appimage-extract || travis_terminate 1; fi
   - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then export PATH=$(readlink -f ./squashfs-root/usr/bin):$PATH || travis_terminate 1; fi
   - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then rm -v "./appdir/usr/lib/libxcb-dri2.so"* "./appdir/usr/lib/libxcb-dri3.so"*; fi
-  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then ./squashfs-root/usr/bin/appimagetool -g ./appdir/ dust3d-$TAG-x86_64.AppImage || travis_terminate 1; fi
+  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then ./squashfs-root/usr/bin/appimagetool -g ./appdir/ dust3d-$TAG.AppImage || travis_terminate 1; fi
 
   # Distribute
   - if [[ "$TRAVIS_PULL_REQUEST" != "false" ]]; then echo "No distribution on pull request"; fi
   - if [[ "$TRAVIS_PULL_REQUEST" != "false" ]]; then travis_terminate 0; fi
   - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then sh ci/upload-github-release-asset.sh github_api_token=${my_auth_token} branch=$BRANCH owner=huxingyi repo=dust3d tag=$TAG filename=dust3d-$TAG.dmg; fi
-  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then bash ci/upload-github-release-asset.sh github_api_token=${my_auth_token} branch=$BRANCH owner=huxingyi repo=dust3d tag=$TAG filename=dust3d-$TAG-x86_64.AppImage; fi
+  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then bash ci/upload-github-release-asset.sh github_api_token=${my_auth_token} branch=$BRANCH owner=huxingyi repo=dust3d tag=$TAG filename=dust3d-$TAG.AppImage; fi

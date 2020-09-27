@@ -6,9 +6,19 @@
 namespace simpleuv 
 {
 
-struct Vertex
+struct Vector3
 {
     float xyz[3];
+};
+
+typedef Vector3 Vertex;
+
+struct Rect
+{
+    float left;
+    float top;
+    float width;
+    float height;
 };
 
 struct Face
@@ -30,8 +40,12 @@ struct Mesh
 {
     std::vector<Vertex> vertices;
     std::vector<Face> faces;
+    std::vector<Vector3> faceNormals;
     std::vector<int> facePartitions;
 };
+
+float dotProduct(const Vector3 &first, const Vector3 &second);
+Vector3 crossProduct(const Vector3 &first, const Vector3 &second);
 
 }
 

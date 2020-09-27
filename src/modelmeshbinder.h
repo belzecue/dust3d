@@ -5,43 +5,68 @@
 #include <QOpenGLBuffer>
 #include <QString>
 #include <QOpenGLTexture>
-#include "meshloader.h"
+#include "model.h"
 #include "modelshaderprogram.h"
 
 class ModelMeshBinder
 {
 public:
-    ModelMeshBinder();
+    ModelMeshBinder(bool toolEnabled=false);
     ~ModelMeshBinder();
-    void updateMesh(MeshLoader *mesh);
+    Model *fetchCurrentMesh();
+    void updateMesh(Model *mesh);
     void initialize();
     void paint(ModelShaderProgram *program);
     void cleanup();
-    void showWireframes();
-    void hideWireframes();
-    bool isWireframesVisible();
+    void showWireframe();
+    void hideWireframe();
+    bool isWireframeVisible();
+    void enableCheckUv();
+    void disableCheckUv();
+    void enableEnvironmentLight();
+    bool isEnvironmentLightEnabled();
+    bool isCheckUvEnabled();
+    void reloadMesh();
+    void fetchCurrentToonNormalAndDepthMaps(QImage *normalMap, QImage *depthMap);
+    void updateToonNormalAndDepthMaps(QImage *normalMap, QImage *depthMap);
 private:
-    MeshLoader *m_mesh;
-    MeshLoader *m_newMesh;
-    int m_renderTriangleVertexCount;
-    int m_renderEdgeVertexCount;
-    bool m_newMeshComing;
-    bool m_showWireframes;
-    bool m_hasTexture;
-    QOpenGLTexture *m_texture;
-    bool m_hasNormalMap;
-    QOpenGLTexture *m_normalMap;
-    bool m_hasMetalnessMap;
-    bool m_hasRoughnessMap;
-    bool m_hasAmbientOcclusionMap;
-    QOpenGLTexture *m_metalnessRoughnessAmbientOcclusionMap;
+    Model *m_mesh = nullptr;
+    Model *m_newMesh = nullptr;
+    int m_renderTriangleVertexCount = 0;
+    int m_renderEdgeVertexCount = 0;
+    int m_renderToolVertexCount = 0;
+    bool m_newMeshComing = false;
+    bool m_showWireframe = false;
+    bool m_hasTexture = false;
+    QOpenGLTexture *m_texture = nullptr;
+    bool m_hasNormalMap = false;
+    QOpenGLTexture *m_normalMap = nullptr;
+    bool m_hasMetalnessMap = false;
+    bool m_hasRoughnessMap = false;
+    bool m_hasAmbientOcclusionMap = false;
+    QOpenGLTexture *m_metalnessRoughnessAmbientOcclusionMap = nullptr;
+    bool m_toolEnabled = false;
+    bool m_checkUvEnabled = false;
+    bool m_environmentLightEnabled = false;
+    QOpenGLTexture *m_environmentIrradianceMap = nullptr;
+    QOpenGLTexture *m_environmentSpecularMap = nullptr;
+    QOpenGLTexture *m_toonNormalMap = nullptr;
+    QOpenGLTexture *m_toonDepthMap = nullptr;
+    QImage *m_newToonNormalMap = nullptr;
+    QImage *m_newToonDepthMap = nullptr;
+    QImage *m_currentToonNormalMap = nullptr;
+    QImage *m_currentToonDepthMap = nullptr;
+    bool m_newToonMapsComing = false;
 private:
     QOpenGLVertexArrayObject m_vaoTriangle;
     QOpenGLBuffer m_vboTriangle;
     QOpenGLVertexArrayObject m_vaoEdge;
     QOpenGLBuffer m_vboEdge;
+    QOpenGLVertexArrayObject m_vaoTool;
+    QOpenGLBuffer m_vboTool;
     QMutex m_meshMutex;
     QMutex m_newMeshMutex;
+    QMutex m_toonNormalAndDepthMapMutex;
 };
 
 #endif

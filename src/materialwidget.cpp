@@ -12,6 +12,7 @@ MaterialWidget::MaterialWidget(const Document *document, QUuid materialId) :
     m_previewWidget->setFixedSize(Theme::materialPreviewImageSize, Theme::materialPreviewImageSize);
     m_previewWidget->enableMove(false);
     m_previewWidget->enableZoom(false);
+    m_previewWidget->enableEnvironmentLight();
 
     m_nameLabel = new QLabel;
     m_nameLabel->setAlignment(Qt::AlignCenter);
@@ -63,23 +64,27 @@ int MaterialWidget::preferredHeight()
 
 void MaterialWidget::reload()
 {
-    updatePreview();
-    updateName();
+    updatePreview(m_materialId);
+    updateName(m_materialId);
 }
 
-void MaterialWidget::updatePreview()
+void MaterialWidget::updatePreview(QUuid materialId)
 {
+    if (materialId != m_materialId)
+        return;
     const Material *material = m_document->findMaterial(m_materialId);
     if (!material) {
         qDebug() << "Material not found:" << m_materialId;
         return;
     }
-    MeshLoader *previewMesh = material->takePreviewMesh();
+    Model *previewMesh = material->takePreviewMesh();
     m_previewWidget->updateMesh(previewMesh);
 }
 
-void MaterialWidget::updateName()
+void MaterialWidget::updateName(QUuid materialId)
 {
+    if (materialId != m_materialId)
+        return;
     const Material *material = m_document->findMaterial(m_materialId);
     if (!material) {
         qDebug() << "Material not found:" << m_materialId;

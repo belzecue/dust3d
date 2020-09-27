@@ -36,7 +36,7 @@ SkinnedMeshCreator::SkinnedMeshCreator(const Outcome &outcome,
     }
 }
 
-MeshLoader *SkinnedMeshCreator::createMeshFromTransform(const std::vector<QMatrix4x4> &matricies)
+Model *SkinnedMeshCreator::createMeshFromTransform(const std::vector<QMatrix4x4> &matricies)
 {
     std::vector<std::vector<QVector3D>> transformedPositions = m_verticesBindPositions;
     std::vector<std::vector<QVector3D>> transformedPoseNormals = m_verticesBindNormals;
@@ -59,11 +59,11 @@ MeshLoader *SkinnedMeshCreator::createMeshFromTransform(const std::vector<QMatri
         }
     }
     
-    Vertex *triangleVertices = new Vertex[m_outcome.triangles.size() * 3];
+    ShaderVertex *triangleVertices = new ShaderVertex[m_outcome.triangles.size() * 3];
     int triangleVerticesNum = 0;
     for (size_t triangleIndex = 0; triangleIndex < m_outcome.triangles.size(); triangleIndex++) {
         for (int i = 0; i < 3; i++) {
-            Vertex &currentVertex = triangleVertices[triangleVerticesNum++];
+            ShaderVertex &currentVertex = triangleVertices[triangleVerticesNum++];
             const auto &sourcePosition = transformedPositions[triangleIndex][i];
             const auto &sourceColor = m_triangleColors[triangleIndex];
             const auto &sourceNormal = transformedPoseNormals[triangleIndex][i];
@@ -78,10 +78,10 @@ MeshLoader *SkinnedMeshCreator::createMeshFromTransform(const std::vector<QMatri
             currentVertex.normX = sourceNormal.x();
             currentVertex.normY = sourceNormal.y();
             currentVertex.normZ = sourceNormal.z();
-            currentVertex.metalness = MeshLoader::m_defaultMetalness;
-            currentVertex.roughness = MeshLoader::m_defaultRoughness;
+            currentVertex.metalness = Model::m_defaultMetalness;
+            currentVertex.roughness = Model::m_defaultRoughness;
         }
     }
     
-    return new MeshLoader(triangleVertices, triangleVerticesNum);
+    return new Model(triangleVertices, triangleVerticesNum);
 }

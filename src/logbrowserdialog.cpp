@@ -13,10 +13,13 @@
 #include <QKeyEvent>
 #include "version.h"
 #include "util.h"
+#include "documentwindow.h"
 
 LogBrowserDialog::LogBrowserDialog(QWidget *parent) :
     QDialog(parent)
 {
+    setWindowFlags(windowFlags() | Qt::WindowStaysOnTopHint);
+    
     QVBoxLayout *layout = new QVBoxLayout;
     setLayout(layout);
 
@@ -106,6 +109,10 @@ void LogBrowserDialog::save()
 
 void LogBrowserDialog::closeEvent(QCloseEvent *e)
 {
+    if (0 == DocumentWindow::total()) {
+        e->accept();
+        return;
+    }
     e->ignore();
     hide();
 }

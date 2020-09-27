@@ -3,7 +3,6 @@
 extern "C" {
 #include <maxrects.h>
 }
-#include <QDebug>
 
 namespace simpleuv
 {
@@ -32,13 +31,15 @@ bool ChartPacker::tryPack(float textureSize)
     std::vector<maxRectsSize> rects;
     int width = textureSize * m_floatToIntFactor;
     int height = width;
-    if (m_tryNum > 3) {
-        qDebug() << "Try the " << m_tryNum << "nth times pack with factor:" << m_textureSizeFactor << " size:" << width << "x" << height;
-    }
+    //if (m_tryNum > 50) {
+    //    qDebug() << "Try the " << m_tryNum << "nth times pack with factor:" << m_textureSizeFactor << " size:" << width << "x" << height;
+    //}
+    float paddingSize = m_paddingSize * width;
+    float paddingSize2 = paddingSize + paddingSize;
     for (const auto &chartSize: m_chartSizes) {
         maxRectsSize r;
-        r.width = chartSize.first * m_floatToIntFactor;
-        r.height = chartSize.second * m_floatToIntFactor;
+        r.width = chartSize.first * m_floatToIntFactor + paddingSize2;
+        r.height = chartSize.second * m_floatToIntFactor + paddingSize2;
         //qDebug() << "  :chart " << r.width << "x" << r.height;
         rects.push_back(r);
     }
@@ -72,30 +73,32 @@ bool ChartPacker::tryPack(float textureSize)
         const auto &result = bestResult[i];
         const auto &rect = rects[i];
         auto &dest = m_result[i];
-        std::get<0>(dest) = (float)result.left / width;
-        std::get<1>(dest) = (float)result.top / height;
-        std::get<2>(dest) = (float)rect.width / width;
-        std::get<3>(dest) = (float)rect.height / height;
+        std::get<0>(dest) = (float)(result.left + paddingSize) / width;
+        std::get<1>(dest) = (float)(result.top + paddingSize) / height;
+        std::get<2>(dest) = (float)(rect.width - paddingSize2) / width;
+        std::get<3>(dest) = (float)(rect.height - paddingSize2) / height;
         std::get<4>(dest) = result.rotated;
         //qDebug() << "result[" << i << "]:" << std::get<0>(dest) << std::get<1>(dest) << std::get<2>(dest) << std::get<3>(dest) << std::get<4>(dest);
     }
     return true;
 }
 
-void ChartPacker::pack()
+float ChartPacker::pack()
 {
+    float textureSize = 0;
     float initialGuessSize = std::sqrt(calculateTotalArea() * m_initialAreaGuessFactor);
     while (true) {
-        float textureSize = initialGuessSize * m_textureSizeFactor;
+        textureSize = initialGuessSize * m_textureSizeFactor;
         ++m_tryNum;
         if (tryPack(textureSize))
             break;
         m_textureSizeFactor += m_textureSizeGrowFactor;
         if (m_tryNum >= m_maxTryNum) {
-            qDebug() << "Tried too many times:" << m_tryNum;
+            //qDebug() << "Tried too many times:" << m_tryNum;
             break;
         }
     }
+    return textureSize;
 }
 
 }

@@ -7,17 +7,23 @@
 #include <QSizePolicy>
 #include <QFileDialog>
 #include <QSizePolicy>
-#include <nodemesh/misc.h>
+#include <QCheckBox>
+#include <QLabel>
+#include <QRadioButton>
 #include "partwidget.h"
 #include "theme.h"
 #include "floatnumberwidget.h"
 #include "materiallistwidget.h"
 #include "infolabel.h"
-#include "cuttemplate.h"
+#include "cutface.h"
 #include "cutdocument.h"
 #include "skeletongraphicswidget.h"
 #include "shortcuts.h"
 #include "graphicscontainerwidget.h"
+#include "flowlayout.h"
+#include "cutfacelistwidget.h"
+#include "imageforever.h"
+#include "imagepreviewwidget.h"
 
 PartWidget::PartWidget(const Document *document, QUuid partId) :
     m_document(document),
@@ -62,20 +68,20 @@ PartWidget::PartWidget(const Document *document, QUuid partId) :
     m_roundButton->setSizePolicy(retainSizePolicy);
     initButton(m_roundButton);
     
+    m_chamferButton = new QPushButton;
+    m_chamferButton->setToolTip(tr("Chamfer"));
+    m_chamferButton->setSizePolicy(retainSizePolicy);
+    initButton(m_chamferButton);
+    
     m_colorButton = new QPushButton;
     m_colorButton->setToolTip(tr("Color and material picker"));
     m_colorButton->setSizePolicy(retainSizePolicy);
     initButton(m_colorButton);
     
     m_cutRotationButton = new QPushButton;
-    m_cutRotationButton->setToolTip(tr("Cut rotation"));
+    m_cutRotationButton->setToolTip(tr("Cut face"));
     m_cutRotationButton->setSizePolicy(retainSizePolicy);
     initButton(m_cutRotationButton);
-    
-    m_cutTemplateButton = new QPushButton;
-    m_cutTemplateButton->setToolTip(tr("Cut template"));
-    m_cutTemplateButton->setSizePolicy(retainSizePolicy);
-    initButton(m_cutTemplateButton);
     
     m_previewWidget = new ModelWidget;
     m_previewWidget->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -109,7 +115,8 @@ PartWidget::PartWidget(const Document *document, QUuid partId) :
     col = 0;
     toolsLayout->addWidget(m_subdivButton, row, col++, Qt::AlignTop);
     toolsLayout->addWidget(m_roundButton, row, col++, Qt::AlignTop);
-    toolsLayout->addWidget(m_cutTemplateButton, row, col++, Qt::AlignTop);
+    //toolsLayout->addWidget(m_cutTemplateButton, row, col++, Qt::AlignTop);
+    toolsLayout->addWidget(m_chamferButton, row, col++, Qt::AlignTop);
     toolsLayout->addWidget(m_cutRotationButton, row, col++, Qt::AlignTop);
     toolsLayout->addWidget(m_deformButton, row, col++, Qt::AlignTop);
     
@@ -156,11 +163,18 @@ PartWidget::PartWidget(const Document *document, QUuid partId) :
     connect(this, &PartWidget::setPartXmirrorState, m_document, &Document::setPartXmirrorState);
     connect(this, &PartWidget::setPartDeformThickness, m_document, &Document::setPartDeformThickness);
     connect(this, &PartWidget::setPartDeformWidth, m_document, &Document::setPartDeformWidth);
+    connect(this, &PartWidget::setPartDeformMapImageId, m_document, &Document::setPartDeformMapImageId);
+    connect(this, &PartWidget::setPartDeformMapScale, m_document, &Document::setPartDeformMapScale);
     connect(this, &PartWidget::setPartRoundState, m_document, &Document::setPartRoundState);
+    connect(this, &PartWidget::setPartChamferState, m_document, &Document::setPartChamferState);
     connect(this, &PartWidget::setPartCutRotation, m_document, &Document::setPartCutRotation);
-    connect(this, &PartWidget::setPartCutTemplate, m_document, &Document::setPartCutTemplate);
+    connect(this, &PartWidget::setPartCutFace, m_document, &Document::setPartCutFace);
+    connect(this, &PartWidget::setPartCutFaceLinkedId, m_document, &Document::setPartCutFaceLinkedId);
     connect(this, &PartWidget::setPartColorState, m_document, &Document::setPartColorState);
     connect(this, &PartWidget::setPartMaterialId, m_document, &Document::setPartMaterialId);
+    connect(this, &PartWidget::setPartColorSolubility, m_document, &Document::setPartColorSolubility);
+    connect(this, &PartWidget::setPartHollowThickness, m_document, &Document::setPartHollowThickness);
+    connect(this, &PartWidget::setPartCountershaded, m_document, &Document::setPartCountershaded);
     connect(this, &PartWidget::checkPart, m_document, &Document::checkPart);
     connect(this, &PartWidget::enableBackgroundBlur, m_document, &Document::enableBackgroundBlur);
     connect(this, &PartWidget::disableBackgroundBlur, m_document, &Document::disableBackgroundBlur);
@@ -193,6 +207,8 @@ PartWidget::PartWidget(const Document *document, QUuid partId) :
             qDebug() << "Part not found:" << m_partId;
             return;
         }
+        if (!part->hasSubdivFunction())
+            return;
         emit setPartSubdivState(m_partId, !part->subdived);
         emit groupOperationAdded();
     });
@@ -213,6 +229,8 @@ PartWidget::PartWidget(const Document *document, QUuid partId) :
             qDebug() << "Part not found:" << m_partId;
             return;
         }
+        if (!part->hasMirrorFunction())
+            return;
         emit setPartXmirrorState(m_partId, !part->xMirrored);
         emit groupOperationAdded();
     });
@@ -223,6 +241,8 @@ PartWidget::PartWidget(const Document *document, QUuid partId) :
             qDebug() << "Part not found:" << m_partId;
             return;
         }
+        if (!part->hasDeformFunction())
+            return;
         showDeformSettingPopup(mapFromGlobal(QCursor::pos()));
     });
     
@@ -232,7 +252,21 @@ PartWidget::PartWidget(const Document *document, QUuid partId) :
             qDebug() << "Part not found:" << m_partId;
             return;
         }
+        if (!part->hasRoundEndFunction())
+            return;
         emit setPartRoundState(m_partId, !part->rounded);
+        emit groupOperationAdded();
+    });
+    
+    connect(m_chamferButton, &QPushButton::clicked, [=]() {
+        const SkeletonPart *part = m_document->findPart(m_partId);
+        if (!part) {
+            qDebug() << "Part not found:" << m_partId;
+            return;
+        }
+        if (!part->hasChamferFunction())
+            return;
+        emit setPartChamferState(m_partId, !part->chamfered);
         emit groupOperationAdded();
     });
     
@@ -242,6 +276,8 @@ PartWidget::PartWidget(const Document *document, QUuid partId) :
             qDebug() << "Part not found:" << m_partId;
             return;
         }
+        if (!part->hasColorFunction())
+            return;
         showColorSettingPopup(mapFromGlobal(QCursor::pos()));
     });
     
@@ -251,16 +287,9 @@ PartWidget::PartWidget(const Document *document, QUuid partId) :
             qDebug() << "Part not found:" << m_partId;
             return;
         }
-        showCutRotationSettingPopup(mapFromGlobal(QCursor::pos()));
-    });
-    
-    connect(m_cutTemplateButton, &QPushButton::clicked, [=]() {
-        const SkeletonPart *part = m_document->findPart(m_partId);
-        if (!part) {
-            qDebug() << "Part not found:" << m_partId;
+        if (!part->hasRotationFunction())
             return;
-        }
-        showCutTemplateSettingPopup(mapFromGlobal(QCursor::pos()));
+        showCutRotationSettingPopup(mapFromGlobal(QCursor::pos()));
     });
     
     setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Minimum);
@@ -288,9 +317,9 @@ void PartWidget::updateAllButtons()
     updateXmirrorButton();
     updateDeformButton();
     updateRoundButton();
+    updateChamferButton();
     updateColorButton();
     updateCutRotationButton();
-    updateCutTemplateButton();
 }
 
 void PartWidget::updateCheckedState(bool checked)
@@ -310,11 +339,11 @@ void PartWidget::updateUnnormalState(bool unnormal)
     updateAllButtons();
 }
 
-void PartWidget::mouseDoubleClickEvent(QMouseEvent *event)
-{
-    QWidget::mouseDoubleClickEvent(event);
-    emit checkPart(m_partId);
-}
+//void PartWidget::mouseDoubleClickEvent(QMouseEvent *event)
+//{
+//    QWidget::mouseDoubleClickEvent(event);
+//    emit checkPart(m_partId);
+//}
 
 void PartWidget::initToolButtonWithoutFont(QPushButton *button)
 {
@@ -344,15 +373,26 @@ void PartWidget::showColorSettingPopup(const QPoint &pos)
     QPushButton *pickButton = new QPushButton();
     initToolButtonWithoutFont(pickButton);
     QPalette palette = pickButton->palette();
-    QColor choosenColor = part->hasColor ? part->color : Qt::white;
+    QColor choosenColor = part->color;
     palette.setColor(QPalette::Window, choosenColor);
     palette.setColor(QPalette::Button, choosenColor);
     pickButton->setPalette(palette);
+    
+    QCheckBox *countershadeStateBox = new QCheckBox();
+    Theme::initCheckbox(countershadeStateBox);
+    countershadeStateBox->setText(tr("Countershaded"));
+    countershadeStateBox->setChecked(part->countershaded);
+    
+    connect(countershadeStateBox, &QCheckBox::stateChanged, this, [=]() {
+        emit setPartCountershaded(m_partId, countershadeStateBox->isChecked());
+        emit groupOperationAdded();
+    });
     
     QHBoxLayout *colorLayout = new QHBoxLayout;
     colorLayout->addWidget(colorEraser);
     colorLayout->addWidget(pickButton);
     colorLayout->addStretch();
+    colorLayout->addWidget(countershadeStateBox);
     
     connect(colorEraser, &QPushButton::clicked, [=]() {
         emit setPartColorState(m_partId, false, Qt::white);
@@ -363,14 +403,71 @@ void PartWidget::showColorSettingPopup(const QPoint &pos)
         emit disableBackgroundBlur();
         QColor color = QColorDialog::getColor(part->color, this);
         emit enableBackgroundBlur();
-        if(color.isValid()) {
+        if (color.isValid()) {
+            const SkeletonPart *part = m_document->findPart(m_partId);
+            if (nullptr == part) {
+                return;
+            }
+            color.setAlphaF(part->color.alphaF());
             emit setPartColorState(m_partId, true, color);
             emit groupOperationAdded();
         }
     });
     
+    FloatNumberWidget *colorTransparencyWidget = new FloatNumberWidget;
+    colorTransparencyWidget->setItemName(tr("Transparency"));
+    colorTransparencyWidget->setRange(0.0, 1.0);
+    colorTransparencyWidget->setValue(1.0 - part->color.alphaF());
+    
+    connect(colorTransparencyWidget, &FloatNumberWidget::valueChanged, [=](float value) {
+        const SkeletonPart *part = m_document->findPart(m_partId);
+        if (nullptr == part) {
+            return;
+        }
+        QColor color = part->color;
+        color.setAlphaF(1.0 - value);
+        emit setPartColorState(m_partId, true, color);
+        emit groupOperationAdded();
+    });
+    
+    QPushButton *colorTransparencyEraser = new QPushButton(QChar(fa::eraser));
+    initToolButton(colorTransparencyEraser);
+    
+    connect(colorTransparencyEraser, &QPushButton::clicked, [=]() {
+        colorTransparencyWidget->setValue(0.0);
+        emit groupOperationAdded();
+    });
+    
+    QHBoxLayout *colorTransparencyLayout = new QHBoxLayout;
+    colorTransparencyLayout->addWidget(colorTransparencyEraser);
+    colorTransparencyLayout->addWidget(colorTransparencyWidget);
+    
+    FloatNumberWidget *colorSolubilityWidget = new FloatNumberWidget;
+    colorSolubilityWidget->setItemName(tr("Solubility"));
+    colorSolubilityWidget->setRange(0.0, 1.0);
+    colorSolubilityWidget->setValue(part->colorSolubility);
+    
+    connect(colorSolubilityWidget, &FloatNumberWidget::valueChanged, [=](float value) {
+        emit setPartColorSolubility(m_partId, value);
+        emit groupOperationAdded();
+    });
+    
+    QPushButton *colorSolubilityEraser = new QPushButton(QChar(fa::eraser));
+    initToolButton(colorSolubilityEraser);
+    
+    connect(colorSolubilityEraser, &QPushButton::clicked, [=]() {
+        colorSolubilityWidget->setValue(0.0);
+        emit groupOperationAdded();
+    });
+    
+    QHBoxLayout *colorSolubilityLayout = new QHBoxLayout;
+    colorSolubilityLayout->addWidget(colorSolubilityEraser);
+    colorSolubilityLayout->addWidget(colorSolubilityWidget);
+    
     QVBoxLayout *mainLayout = new QVBoxLayout;
     mainLayout->addLayout(colorLayout);
+    mainLayout->addLayout(colorTransparencyLayout);
+    mainLayout->addLayout(colorSolubilityLayout);
     
     if (m_document->materialIdList.empty()) {
         InfoLabel *infoLabel = new InfoLabel;
@@ -427,130 +524,128 @@ void PartWidget::showCutRotationSettingPopup(const QPoint &pos)
         emit groupOperationAdded();
     });
     
-    QVBoxLayout *layout = new QVBoxLayout;
+    QPushButton *rotationMinus5Button = new QPushButton(QChar(fa::rotateleft));
+    initToolButton(rotationMinus5Button);
+    
+    connect(rotationMinus5Button, &QPushButton::clicked, [=]() {
+        rotationWidget->setValue(-0.5);
+        emit groupOperationAdded();
+    });
+    
+    QPushButton *rotation5Button = new QPushButton(QChar(fa::rotateright));
+    initToolButton(rotation5Button);
+    
+    connect(rotation5Button, &QPushButton::clicked, [=]() {
+        rotationWidget->setValue(0.5);
+        emit groupOperationAdded();
+    });
+    
     QHBoxLayout *rotationLayout = new QHBoxLayout;
     rotationLayout->addWidget(rotationEraser);
     rotationLayout->addWidget(rotationWidget);
-    layout->addLayout(rotationLayout);
+    rotationLayout->addWidget(rotationMinus5Button);
+    rotationLayout->addWidget(rotation5Button);
     
-    popup->setLayout(layout);
+    QHBoxLayout *hollowThicknessLayout = nullptr;
+    QHBoxLayout *standardFacesLayout = nullptr;
+    CutFaceListWidget *cutFaceListWidget = nullptr;
     
-    QWidgetAction action(this);
-    action.setDefaultWidget(popup);
-    
-    popupMenu.addAction(&action);
-    
-    popupMenu.exec(mapToGlobal(pos));
-}
-
-void PartWidget::showCutTemplateSettingPopup(const QPoint &pos)
-{
-    QMenu popupMenu;
-    
-    const SkeletonPart *part = m_document->findPart(m_partId);
-    if (!part) {
-        qDebug() << "Find part failed:" << m_partId;
-        return;
-    }
-    
-    CutDocument cutDocument;
-    SkeletonGraphicsWidget *graphicsWidget = new SkeletonGraphicsWidget(&cutDocument);
-    graphicsWidget->setNodePositionModifyOnly(true);
-    graphicsWidget->setMainProfileOnly(true);
-    
-    GraphicsContainerWidget *containerWidget = new GraphicsContainerWidget;
-    containerWidget->setGraphicsWidget(graphicsWidget);
-    QGridLayout *containerLayout = new QGridLayout;
-    containerLayout->setSpacing(0);
-    containerLayout->setContentsMargins(1, 0, 0, 0);
-    containerLayout->addWidget(graphicsWidget);
-    containerWidget->setLayout(containerLayout);
-    containerWidget->setFixedSize(160, 100);
-    
-    connect(containerWidget, &GraphicsContainerWidget::containerSizeChanged,
-        graphicsWidget, &SkeletonGraphicsWidget::canvasResized);
-    
-    connect(graphicsWidget, &SkeletonGraphicsWidget::moveNodeBy, &cutDocument, &CutDocument::moveNodeBy);
-    connect(graphicsWidget, &SkeletonGraphicsWidget::setNodeOrigin, &cutDocument, &CutDocument::setNodeOrigin);
-    connect(graphicsWidget, &SkeletonGraphicsWidget::groupOperationAdded, &cutDocument, &CutDocument::saveHistoryItem);
-    connect(graphicsWidget, &SkeletonGraphicsWidget::undo, &cutDocument, &CutDocument::undo);
-    connect(graphicsWidget, &SkeletonGraphicsWidget::redo, &cutDocument, &CutDocument::redo);
-    connect(graphicsWidget, &SkeletonGraphicsWidget::paste, &cutDocument, &CutDocument::paste);
-    
-    connect(&cutDocument, &CutDocument::cleanup, graphicsWidget, &SkeletonGraphicsWidget::removeAllContent);
-    
-    connect(&cutDocument, &CutDocument::nodeAdded, graphicsWidget, &SkeletonGraphicsWidget::nodeAdded);
-    connect(&cutDocument, &CutDocument::edgeAdded, graphicsWidget, &SkeletonGraphicsWidget::edgeAdded);
-    connect(&cutDocument, &CutDocument::nodeOriginChanged, graphicsWidget, &SkeletonGraphicsWidget::nodeOriginChanged);
-    
-    cutDocument.fromCutTemplate(part->cutTemplate);
-    
-    connect(&cutDocument, &CutDocument::cutTemplateChanged, this, [&]() {
-        std::vector<QVector2D> cutTemplate;
-        cutDocument.toCutTemplate(cutTemplate);
-        emit setPartCutTemplate(m_partId, cutTemplate);
-    });
-    
-    QWidget *popup = new QWidget;
-    
-    initShortCuts(popup, graphicsWidget);
-    
-    std::vector<QPushButton *> presetButtons;
-    
-    {
-        CutTemplate cutTemplate = CutTemplate::Quad;
-        QPushButton *button = new QPushButton(tr("Reset"));
-        connect(button, &QPushButton::clicked, [cutTemplate, &cutDocument, this]() {
-            auto points = CutTemplateToPoints(cutTemplate);
-            cutDocument.fromCutTemplate(points);
-            emit setPartCutTemplate(m_partId, points);
+    if (part->hasHollowFunction()) {
+        FloatNumberWidget *hollowThicknessWidget = new FloatNumberWidget;
+        hollowThicknessWidget->setItemName(tr("Hollow"));
+        hollowThicknessWidget->setRange(0.0, 1.0);
+        hollowThicknessWidget->setValue(part->hollowThickness);
+        
+        connect(hollowThicknessWidget, &FloatNumberWidget::valueChanged, [=](float value) {
+            emit setPartHollowThickness(m_partId, value);
             emit groupOperationAdded();
         });
-        Theme::initToolButton(button);
-        presetButtons.push_back(button);
-    }
-    
-    /*
-    {
-        QPushButton *button = new QPushButton(tr("Subdivide"));
-        connect(button, &QPushButton::clicked, [&cutDocument, this]() {
-            std::vector<QVector2D> cutTemplate;
-            cutDocument.toCutTemplate(cutTemplate);
-            nodemesh::subdivideFace2D(&cutTemplate);
-            cutDocument.fromCutTemplate(cutTemplate);
-            emit setPartCutTemplate(m_partId, cutTemplate);
+        
+        QPushButton *hollowThicknessEraser = new QPushButton(QChar(fa::eraser));
+        initToolButton(hollowThicknessEraser);
+        
+        connect(hollowThicknessEraser, &QPushButton::clicked, [=]() {
+            hollowThicknessWidget->setValue(0.0);
             emit groupOperationAdded();
         });
-        Theme::initToolButton(button);
-        presetButtons.push_back(button);
+        
+        hollowThicknessLayout = new QHBoxLayout;
+        hollowThicknessLayout->addWidget(hollowThicknessEraser);
+        hollowThicknessLayout->addWidget(hollowThicknessWidget);
     }
-    */
     
-    {
-        QPushButton *button = new QPushButton(tr("Chamfer"));
-        connect(button, &QPushButton::clicked, [&cutDocument, this]() {
-            std::vector<QVector2D> cutTemplate;
-            cutDocument.toCutTemplate(cutTemplate);
-            nodemesh::chamferFace2D(&cutTemplate);
-            cutDocument.fromCutTemplate(cutTemplate);
-            emit setPartCutTemplate(m_partId, cutTemplate);
-            emit groupOperationAdded();
+    QPushButton *buttons[(int)CutFace::Count] = {0};
+    
+    if (part->hasCutFaceFunction()) {
+        standardFacesLayout = new QHBoxLayout;
+        
+        cutFaceListWidget = new CutFaceListWidget(m_document);
+        size_t cutFaceTypeCount = (size_t)CutFace::UserDefined;
+        
+        auto updateCutFaceButtonState = [&](size_t index) {
+            if (index != (int)CutFace::UserDefined)
+                cutFaceListWidget->selectCutFace(QUuid());
+            for (size_t i = 0; i < (size_t)cutFaceTypeCount; ++i) {
+                auto button = buttons[i];
+                if (i == index) {
+                    button->setFlat(true);
+                    button->setEnabled(false);
+                } else {
+                    button->setFlat(false);
+                    button->setEnabled(true);
+                }
+            }
+        };
+        
+        cutFaceListWidget->enableMultipleSelection(false);
+        cutFaceListWidget->selectCutFace(part->cutFaceLinkedId);
+        connect(cutFaceListWidget, &CutFaceListWidget::currentSelectedCutFaceChanged, this, [=](QUuid partId) {
+            if (partId.isNull()) {
+                CutFace cutFace = CutFace::Quad;
+                updateCutFaceButtonState((int)cutFace);
+                emit setPartCutFace(m_partId, cutFace);
+                emit groupOperationAdded();
+            } else {
+                updateCutFaceButtonState((int)CutFace::UserDefined);
+                emit setPartCutFaceLinkedId(m_partId, partId);
+                emit groupOperationAdded();
+            }
         });
-        Theme::initToolButton(button);
-        presetButtons.push_back(button);
+        if (cutFaceListWidget->isEmpty())
+            cutFaceListWidget->hide();
+        
+        for (size_t i = 0; i < (size_t)cutFaceTypeCount; ++i) {
+            CutFace cutFace = (CutFace)i;
+            QString iconFilename = ":/resources/" + CutFaceToString(cutFace).toLower() + ".png";
+            QPixmap pixmap(iconFilename);
+            QIcon buttonIcon(pixmap);
+            QPushButton *button = new QPushButton;
+            button->setIconSize(QSize(Theme::toolIconSize / 2, Theme::toolIconSize / 2));
+            button->setIcon(buttonIcon);
+            connect(button, &QPushButton::clicked, [=]() {
+                updateCutFaceButtonState(i);
+                emit setPartCutFace(m_partId, cutFace);
+                emit groupOperationAdded();
+            });
+            standardFacesLayout->addWidget(button);
+            buttons[i] = button;
+        }
+        standardFacesLayout->addStretch();
+        updateCutFaceButtonState((size_t)part->cutFace);
     }
-
-    QVBoxLayout *layout = new QVBoxLayout;
-    QHBoxLayout *presetButtonsLayout = new QHBoxLayout;
-    for (const auto &it: presetButtons)
-        presetButtonsLayout->addWidget(it);
-    presetButtonsLayout->addStretch();
-    layout->addLayout(presetButtonsLayout);
-    layout->addWidget(containerWidget);
     
-    popup->setLayout(layout);
+    QVBoxLayout *popupLayout = new QVBoxLayout;
+    popupLayout->addLayout(rotationLayout);
+    if (nullptr != hollowThicknessLayout)
+        popupLayout->addLayout(hollowThicknessLayout);
+    if (nullptr != standardFacesLayout || nullptr != cutFaceListWidget)
+        popupLayout->addWidget(Theme::createHorizontalLineWidget());
+    if (nullptr != standardFacesLayout)
+        popupLayout->addLayout(standardFacesLayout);
+    if (nullptr != cutFaceListWidget)
+        popupLayout->addWidget(cutFaceListWidget);
     
-    popup->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Minimum);
+    popup->setLayout(popupLayout);
     
     QWidgetAction action(this);
     action.setDefaultWidget(popup);
@@ -608,17 +703,103 @@ void PartWidget::showDeformSettingPopup(const QPoint &pos)
         emit groupOperationAdded();
     });
     
-    QVBoxLayout *layout = new QVBoxLayout;
+    QVBoxLayout *mainLayout = new QVBoxLayout;
+    
     QHBoxLayout *thicknessLayout = new QHBoxLayout;
     QHBoxLayout *widthLayout = new QHBoxLayout;
     thicknessLayout->addWidget(thicknessEraser);
     thicknessLayout->addWidget(thicknessWidget);
     widthLayout->addWidget(widthEraser);
     widthLayout->addWidget(widthWidget);
-    layout->addLayout(thicknessLayout);
-    layout->addLayout(widthLayout);
     
-    popup->setLayout(layout);
+    auto pickImage = [this]() {
+        QString fileName = QFileDialog::getOpenFileName(this, QString(), QString(),
+            tr("Image Files (*.png *.jpg *.bmp)")).trimmed();
+        if (fileName.isEmpty())
+            return (QImage *)nullptr;
+        QImage *image = new QImage();
+        if (!image->load(fileName))
+            return (QImage *)nullptr;
+        return image;
+    };
+    
+    ImagePreviewWidget *deformImageButton = new ImagePreviewWidget;
+    deformImageButton->setFixedHeight(Theme::partPreviewImageSize * 2);
+    deformImageButton->updateBackgroundColor(QColor(127, 127, 127));
+    
+    QPushButton *deformImageEraser = new QPushButton(QChar(fa::eraser));
+    initToolButton(deformImageEraser);
+    
+    auto updateImageButtonBackground = [=](const QImage *image) {
+        if (nullptr == image) {
+            deformImageButton->updateImage(QImage());
+        } else {
+            deformImageButton->updateImage(*image);
+        }
+    };
+    
+    if (!part->deformMapImageId.isNull())
+        updateImageButtonBackground(ImageForever::get(part->deformMapImageId));
+    else
+        updateImageButtonBackground(nullptr);
+    
+    connect(deformImageEraser, &QPushButton::clicked, [=]() {
+        updateImageButtonBackground(nullptr);
+        emit setPartDeformMapImageId(m_partId, QUuid());
+    });
+    
+    connect(deformImageButton, &ImagePreviewWidget::clicked, [=]() {
+        QImage *image = pickImage();
+        if (nullptr == image)
+            return;
+        QUuid imageId = ImageForever::add(image);
+        updateImageButtonBackground(image);
+        delete image;
+        emit setPartDeformMapImageId(m_partId, imageId);
+    });
+    
+    QHBoxLayout *deformMapScaleLayout = nullptr;
+    QHBoxLayout *deformImageLayout = nullptr;
+    
+    if (part->hasDeformImageFunction()) {
+        deformImageLayout = new QHBoxLayout;
+        deformImageLayout->addWidget(deformImageEraser);
+        deformImageLayout->addWidget(deformImageButton);
+        deformImageLayout->setStretch(1, 1);
+        
+        FloatNumberWidget *deformMapScaleWidget = new FloatNumberWidget;
+        deformMapScaleWidget->setItemName(tr("Map Scale"));
+        deformMapScaleWidget->setRange(0, 1.0);
+        deformMapScaleWidget->setValue(part->deformMapScale);
+        
+        connect(deformMapScaleWidget, &FloatNumberWidget::valueChanged, [=](float value) {
+            emit setPartDeformMapScale(m_partId, value);
+            emit groupOperationAdded();
+        });
+
+        QPushButton *deformMapScaleEraser = new QPushButton(QChar(fa::eraser));
+        initToolButton(deformMapScaleEraser);
+        
+        connect(deformMapScaleEraser, &QPushButton::clicked, [=]() {
+            deformMapScaleWidget->setValue(0.5);
+            emit groupOperationAdded();
+        });
+        
+        deformMapScaleLayout = new QHBoxLayout;
+        deformMapScaleLayout->addWidget(deformMapScaleEraser);
+        deformMapScaleLayout->addWidget(deformMapScaleWidget);
+    }
+    
+    mainLayout->addLayout(thicknessLayout);
+    mainLayout->addLayout(widthLayout);
+    if (nullptr != deformMapScaleLayout || nullptr != deformImageLayout)
+        mainLayout->addWidget(Theme::createHorizontalLineWidget());
+    if (nullptr != deformMapScaleLayout)
+        mainLayout->addLayout(deformMapScaleLayout);
+    if (nullptr != deformImageLayout)
+        mainLayout->addLayout(deformImageLayout);
+    
+    popup->setLayout(mainLayout);
     
     QWidgetAction action(this);
     action.setDefaultWidget(popup);
@@ -633,9 +814,9 @@ void PartWidget::initButton(QPushButton *button)
     Theme::initAwesomeMiniButton(button);
 }
 
-void PartWidget::updateButton(QPushButton *button, QChar icon, bool highlighted)
+void PartWidget::updateButton(QPushButton *button, QChar icon, bool highlighted, bool enabled)
 {
-    Theme::updateAwesomeMiniButton(button, icon, highlighted, m_unnormal);
+    Theme::updateAwesomeMiniButton(button, icon, highlighted, enabled, m_unnormal);
 }
 
 void PartWidget::updatePreview()
@@ -646,8 +827,21 @@ void PartWidget::updatePreview()
         return;
     }
     //m_previewLabel->setPixmap(QPixmap::fromImage(part->preview));
-    MeshLoader *previewMesh = part->takePreviewMesh();
+    Model *previewMesh = part->takePreviewMesh();
     m_previewWidget->updateMesh(previewMesh);
+    if (PartTarget::CutFace == part->target) {
+        if (0 != m_previewWidget->xRot()) {
+            m_previewWidget->setXRotation(0);
+            m_previewWidget->setYRotation(0);
+            m_previewWidget->setZRotation(0);
+        }
+    } else {
+        if (0 == m_previewWidget->xRot()) {
+            m_previewWidget->setXRotation(ModelWidget::m_defaultXRotation);
+            m_previewWidget->setYRotation(ModelWidget::m_defaultYRotation);
+            m_previewWidget->setZRotation(ModelWidget::m_defaultZRotation);
+        }
+    }
 }
 
 void PartWidget::updateLockButton()
@@ -684,9 +878,9 @@ void PartWidget::updateSubdivButton()
         return;
     }
     if (part->subdived)
-        updateButton(m_subdivButton, QChar(fa::circleo), true);
+        updateButton(m_subdivButton, QChar(fa::circleo), true, part->hasSubdivFunction());
     else
-        updateButton(m_subdivButton, QChar(fa::squareo), false);
+        updateButton(m_subdivButton, QChar(fa::squareo), false, part->hasSubdivFunction());
 }
 
 void PartWidget::updateDisableButton()
@@ -710,9 +904,9 @@ void PartWidget::updateXmirrorButton()
         return;
     }
     if (part->xMirrored)
-        updateButton(m_xMirrorButton, QChar(fa::balancescale), true);
+        updateButton(m_xMirrorButton, QChar(fa::balancescale), true, part->hasMirrorFunction());
     else
-        updateButton(m_xMirrorButton, QChar(fa::balancescale), false);
+        updateButton(m_xMirrorButton, QChar(fa::balancescale), false, part->hasMirrorFunction());
 }
 
 void PartWidget::updateDeformButton()
@@ -722,10 +916,10 @@ void PartWidget::updateDeformButton()
         qDebug() << "Part not found:" << m_partId;
         return;
     }
-    if (part->deformAdjusted())
-        updateButton(m_deformButton, QChar(fa::handlizardo), true);
+    if (part->deformAdjusted() || part->deformMapAdjusted())
+        updateButton(m_deformButton, QChar(fa::handlizardo), true, part->hasDeformFunction());
     else
-        updateButton(m_deformButton, QChar(fa::handlizardo), false);
+        updateButton(m_deformButton, QChar(fa::handlizardo), false, part->hasDeformFunction());
 }
 
 void PartWidget::updateRoundButton()
@@ -736,9 +930,22 @@ void PartWidget::updateRoundButton()
         return;
     }
     if (part->rounded)
-        updateButton(m_roundButton, QChar(fa::magnet), true);
+        updateButton(m_roundButton, QChar(fa::magnet), true, part->hasRoundEndFunction());
     else
-        updateButton(m_roundButton, QChar(fa::magnet), false);
+        updateButton(m_roundButton, QChar(fa::magnet), false, part->hasRoundEndFunction());
+}
+
+void PartWidget::updateChamferButton()
+{
+    const SkeletonPart *part = m_document->findPart(m_partId);
+    if (!part) {
+        qDebug() << "Part not found:" << m_partId;
+        return;
+    }
+    if (part->chamfered)
+        updateButton(m_chamferButton, QChar(fa::scissors), true, part->hasChamferFunction());
+    else
+        updateButton(m_chamferButton, QChar(fa::scissors), false, part->hasChamferFunction());
 }
 
 void PartWidget::updateColorButton()
@@ -748,10 +955,10 @@ void PartWidget::updateColorButton()
         qDebug() << "Part not found:" << m_partId;
         return;
     }
-    if (part->hasColor || part->materialAdjusted())
-        updateButton(m_colorButton, QChar(fa::eyedropper), true);
+    if (part->hasColor || part->materialAdjusted() || part->colorSolubilityAdjusted() || part->countershaded)
+        updateButton(m_colorButton, QChar(fa::eyedropper), true, part->hasColorFunction());
     else
-        updateButton(m_colorButton, QChar(fa::eyedropper), false);
+        updateButton(m_colorButton, QChar(fa::eyedropper), false, part->hasColorFunction());
 }
 
 void PartWidget::updateCutRotationButton()
@@ -761,23 +968,10 @@ void PartWidget::updateCutRotationButton()
         qDebug() << "Part not found:" << m_partId;
         return;
     }
-    if (part->cutRotationAdjusted())
-        updateButton(m_cutRotationButton, QChar(fa::spinner), true);
+    if (part->cutAdjusted())
+        updateButton(m_cutRotationButton, QChar(fa::spinner), true, part->hasRotationFunction());
     else
-        updateButton(m_cutRotationButton, QChar(fa::spinner), false);
-}
-
-void PartWidget::updateCutTemplateButton()
-{
-    const SkeletonPart *part = m_document->findPart(m_partId);
-    if (!part) {
-        qDebug() << "Part not found:" << m_partId;
-        return;
-    }
-    if (part->cutTemplateAdjusted())
-        updateButton(m_cutTemplateButton, QChar(fa::objectungroup), true);
-    else
-        updateButton(m_cutTemplateButton, QChar(fa::objectungroup), false);
+        updateButton(m_cutRotationButton, QChar(fa::spinner), false, part->hasRotationFunction());
 }
 
 void PartWidget::reload()

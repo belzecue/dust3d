@@ -7,19 +7,37 @@
 #include <simpleuv/parametrize.h>
 #include <simpleuv/chartpacker.h>
 #include <simpleuv/triangulate.h>
-#include <QDebug>
+#include <Eigen/Dense>
+#include <Eigen/Geometry>
 
 namespace simpleuv 
 {
+
+const std::vector<float> UvUnwrapper::m_rotateDegrees = {5, 15, 20, 25, 30, 35, 40, 45};
 
 void UvUnwrapper::setMesh(const Mesh &mesh)
 {
     m_mesh = mesh;
 }
 
-const std::vector<FaceTextureCoords> &UvUnwrapper::getFaceUvs()
+void UvUnwrapper::setTexelSize(float texelSize)
+{
+    m_texelSizePerUnit = texelSize;
+}
+
+const std::vector<FaceTextureCoords> &UvUnwrapper::getFaceUvs() const
 {
     return m_faceUvs;
+}
+
+const std::vector<Rect> &UvUnwrapper::getChartRects() const
+{
+    return m_chartRects;
+}
+
+const std::vector<int> &UvUnwrapper::getChartSourcePartitions() const
+{
+    return m_chartSourcePartitions;
 }
 
 void UvUnwrapper::buildEdgeToFaceMap(const std::vector<Face> &faces, std::map<std::pair<size_t, size_t>, size_t> &edgeToFaceMap)
@@ -50,6 +68,7 @@ void UvUnwrapper::splitPartitionToIslands(const std::vector<size_t> &group, std:
 {
     std::map<std::pair<size_t, size_t>, size_t> edgeToFaceMap;
     buildEdgeToFaceMap(group, edgeToFaceMap);
+    bool segmentByNormal = !m_mesh.faceNormals.empty() && m_segmentByNormal;
     
     std::unordered_set<size_t> processedFaces;
     std::queue<size_t> waitFaces;
@@ -69,6 +88,12 @@ void UvUnwrapper::splitPartitionToIslands(const std::vector<size_t> &group, std:
                 auto findOppositeFaceResult = edgeToFaceMap.find({face.indices[j], face.indices[i]});
                 if (findOppositeFaceResult == edgeToFaceMap.end())
                     continue;
+                if (segmentByNormal) {
+                    if (dotProduct(m_mesh.faceNormals[findOppositeFaceResult->second],
+                            m_mesh.faceNormals[m_segmentPreferMorePieces ? indexInGroup : index]) < m_segmentDotProductThreshold) {
+                        continue;
+                    }
+                }
                 waitFaces.push(findOppositeFaceResult->second);
             }
             island.push_back(index);
@@ -161,7 +186,7 @@ bool UvUnwrapper::fixHolesExceptTheLongestRing(const std::vector<Vertex> &vertic
             while (true) {
                 auto findLinkResult = holeVertexLink.find(index);
                 if (findLinkResult == holeVertexLink.end()) {
-                    qDebug() << "Search ring failed";
+                    //qDebug() << "Search ring failed";
                     return false;
                 }
                 for (const auto &item: findLinkResult->second) {
@@ -182,7 +207,7 @@ bool UvUnwrapper::fixHolesExceptTheLongestRing(const std::vector<Vertex> &vertic
                         }
                     }
                     if (!foundNewPath) {
-                        qDebug() << "No new path to try";
+                        //qDebug() << "No new path to try";
                         return false;
                     }
                     visitedPath.insert({prev, index});
@@ -202,7 +227,7 @@ bool UvUnwrapper::fixHolesExceptTheLongestRing(const std::vector<Vertex> &vertic
             }
         }
         if (ring.size() < 3) {
-            qDebug() << "Ring too short, size:" << ring.size();
+            //qDebug() << "Ring too short, size:" << ring.size();
             return false;
         }
         holeRings.push_back({ring, ringLength});
@@ -291,38 +316,120 @@ void UvUnwrapper::makeSeamAndCut(const std::vector<Vertex> &verticies,
     }
 }
 
+float UvUnwrapper::areaOf3dTriangle(const Eigen::Vector3d &a, const Eigen::Vector3d &b, const Eigen::Vector3d &c)
+{
+    auto ab = b - a;
+    auto ac = c - a;
+    return 0.5 * (ab.cross(ac)).norm();
+}
+
+float UvUnwrapper::areaOf2dTriangle(const Eigen::Vector2d &a, const Eigen::Vector2d &b, const Eigen::Vector2d &c)
+{
+    return areaOf3dTriangle(Eigen::Vector3d(a.x(), a.y(), 0),
+        Eigen::Vector3d(b.x(), b.y(), 0),
+        Eigen::Vector3d(c.x(), c.y(), 0));
+}
+
 void UvUnwrapper::calculateSizeAndRemoveInvalidCharts()
 {
     auto charts = m_charts;
+    auto chartSourcePartitions = m_chartSourcePartitions;
     m_charts.clear();
-    for (auto &chart: charts) {
+    m_chartSourcePartitions.clear();
+    for (size_t chartIndex = 0; chartIndex < charts.size(); ++chartIndex) {
+        auto &chart = charts[chartIndex];
         float left, top, right, bottom;
         left = top = right = bottom = 0;
         calculateFaceTextureBoundingBox(chart.second, left, top, right, bottom);
         std::pair<float, float> size = {right - left, bottom - top};
         if (size.first <= 0 || std::isnan(size.first) || std::isinf(size.first) ||
                 size.second <= 0 || std::isnan(size.second) || std::isinf(size.second)) {
-            qDebug() << "Found invalid chart size:" << size.first << "x" << size.second;
+            //qDebug() << "Found invalid chart size:" << size.first << "x" << size.second;
             continue;
         }
+        float surfaceArea = 0;
+        for (const auto &item: chart.first) {
+            const auto &face = m_mesh.faces[item];
+            surfaceArea += areaOf3dTriangle(Eigen::Vector3d(m_mesh.vertices[face.indices[0]].xyz[0],
+                    m_mesh.vertices[face.indices[0]].xyz[1],
+                    m_mesh.vertices[face.indices[0]].xyz[2]),
+                Eigen::Vector3d(m_mesh.vertices[face.indices[1]].xyz[0],
+                    m_mesh.vertices[face.indices[1]].xyz[1],
+                    m_mesh.vertices[face.indices[1]].xyz[2]),
+                Eigen::Vector3d(m_mesh.vertices[face.indices[2]].xyz[0],
+                    m_mesh.vertices[face.indices[2]].xyz[1],
+                    m_mesh.vertices[face.indices[2]].xyz[2]));
+        }
+        float uvArea = 0;
         for (auto &item: chart.second) {
             for (int i = 0; i < 3; ++i) {
                 item.coords[i].uv[0] -= left;
                 item.coords[i].uv[1] -= top;
             }
+            uvArea += areaOf2dTriangle(Eigen::Vector2d(item.coords[0].uv[0], item.coords[0].uv[1]),
+                Eigen::Vector2d(item.coords[1].uv[0], item.coords[1].uv[1]),
+                Eigen::Vector2d(item.coords[2].uv[0], item.coords[2].uv[1]));
+        }
+        if (m_enableRotation) {
+            Eigen::Vector3d center(size.first * 0.5, size.second * 0.5, 0);
+            float minRectArea = size.first * size.second;
+            float minRectLeft = 0;
+            float minRectTop = 0;
+            bool rotated = false;
+            for (const auto &degree: m_rotateDegrees) {
+                Eigen::Matrix3d matrix;
+                matrix = Eigen::AngleAxisd(degree * 180.0 / 3.1415926, Eigen::Vector3d::UnitZ());
+                std::vector<FaceTextureCoords> rotatedUvs;
+                for (auto &item: chart.second) {
+                    FaceTextureCoords rotatedCoords;
+                    for (int i = 0; i < 3; ++i) {
+                        Eigen::Vector3d point(item.coords[i].uv[0], item.coords[i].uv[1], 0);
+                        point -= center;
+                        point = matrix * point;
+                        rotatedCoords.coords[i].uv[0] = point.x();
+                        rotatedCoords.coords[i].uv[1] = point.y();
+                    }
+                    rotatedUvs.push_back(rotatedCoords);
+                }
+                left = top = right = bottom = 0;
+                calculateFaceTextureBoundingBox(rotatedUvs, left, top, right, bottom);
+                std::pair<float, float> newSize = {right - left, bottom - top};
+                float newRectArea = newSize.first * newSize.second;
+                if (newRectArea < minRectArea) {
+                    minRectArea = newRectArea;
+                    size = newSize;
+                    minRectLeft = left;
+                    minRectTop = top;
+                    rotated = true;
+                    chart.second = rotatedUvs;
+                }
+            }
+            if (rotated) {
+                for (auto &item: chart.second) {
+                    for (int i = 0; i < 3; ++i) {
+                        item.coords[i].uv[0] -= minRectLeft;
+                        item.coords[i].uv[1] -= minRectTop;
+                    }
+                }
+            }
         }
         //qDebug() << "left:" << left << "top:" << top << "right:" << right << "bottom:" << bottom;
         //qDebug() << "width:" << size.first << "height:" << size.second;
+        float ratioOfSurfaceAreaAndUvArea = uvArea > 0 ? surfaceArea / uvArea : 1.0;
+        float scale = ratioOfSurfaceAreaAndUvArea * m_texelSizePerUnit;
         m_chartSizes.push_back(size);
+        m_scaledChartSizes.push_back(std::make_pair(size.first * scale, size.second * scale));
         m_charts.push_back(chart);
+        m_chartSourcePartitions.push_back(chartSourcePartitions[chartIndex]);
     }
 }
 
 void UvUnwrapper::packCharts()
 {
     ChartPacker chartPacker;
-    chartPacker.setCharts(m_chartSizes);
-    chartPacker.pack();
+    chartPacker.setCharts(m_scaledChartSizes);
+    m_resultTextureSize = chartPacker.pack();
+    m_chartRects.resize(m_chartSizes.size());
     const std::vector<std::tuple<float, float, float, float, bool>> &packedResult = chartPacker.getResult();
     for (decltype(m_charts.size()) i = 0; i < m_charts.size(); ++i) {
         const auto &chartSize = m_chartSizes[i];
@@ -342,6 +449,10 @@ void UvUnwrapper::packCharts()
         auto &width = std::get<2>(result);
         auto &height = std::get<3>(result);
         auto &flipped = std::get<4>(result);
+        if (flipped)
+            m_chartRects[i] = {left, top, height, width};
+        else
+            m_chartRects[i] = {left, top, width, height};
         if (flipped) {
             for (auto &item: chart.second) {
                 for (int i = 0; i < 3; ++i) {
@@ -388,7 +499,7 @@ void UvUnwrapper::partition()
     }
 }
 
-void UvUnwrapper::unwrapSingleIsland(const std::vector<size_t> &group, bool skipCheckHoles)
+void UvUnwrapper::unwrapSingleIsland(const std::vector<size_t> &group, int sourcePartition, bool skipCheckHoles)
 {
     if (group.empty())
         return;
@@ -420,11 +531,11 @@ void UvUnwrapper::unwrapSingleIsland(const std::vector<size_t> &group, bool skip
     decltype(localFaces.size()) faceNumBeforeFix = localFaces.size();
     size_t remainingHoleNumAfterFix = 0;
     if (!fixHolesExceptTheLongestRing(localVertices, localFaces, &remainingHoleNumAfterFix)) {
-        qDebug() << "fixHolesExceptTheLongestRing failed";
+        //qDebug() << "fixHolesExceptTheLongestRing failed";
         return;
     }
     if (1 == remainingHoleNumAfterFix) {
-        parametrizeSingleGroup(localVertices, localFaces, localToGlobalFacesMap, faceNumBeforeFix);
+        parametrizeSingleGroup(localVertices, localFaces, localToGlobalFacesMap, faceNumBeforeFix, sourcePartition);
         return;
     }
     
@@ -433,11 +544,11 @@ void UvUnwrapper::unwrapSingleIsland(const std::vector<size_t> &group, bool skip
         std::vector<size_t> secondGroup;
         makeSeamAndCut(localVertices, localFaces, localToGlobalFacesMap, firstGroup, secondGroup);
         if (firstGroup.empty() || secondGroup.empty()) {
-            qDebug() << "Cut mesh failed";
+            //qDebug() << "Cut mesh failed";
             return;
         }
-        unwrapSingleIsland(firstGroup, true);
-        unwrapSingleIsland(secondGroup, true);
+        unwrapSingleIsland(firstGroup, sourcePartition, true);
+        unwrapSingleIsland(secondGroup, sourcePartition, true);
         return;
     }
 }
@@ -445,7 +556,8 @@ void UvUnwrapper::unwrapSingleIsland(const std::vector<size_t> &group, bool skip
 void UvUnwrapper::parametrizeSingleGroup(const std::vector<Vertex> &verticies,
         const std::vector<Face> &faces,
         std::map<size_t, size_t> &localToGlobalFacesMap,
-        size_t faceNumToChart)
+        size_t faceNumToChart,
+        int sourcePartition)
 {
     std::vector<TextureCoord> localVertexUvs;
     if (!parametrize(verticies, faces, localVertexUvs))
@@ -467,6 +579,12 @@ void UvUnwrapper::parametrizeSingleGroup(const std::vector<Vertex> &verticies,
     if (chart.first.empty())
         return;
     m_charts.push_back(chart);
+    m_chartSourcePartitions.push_back(sourcePartition);
+}
+
+float UvUnwrapper::getTextureSize() const
+{
+    return m_resultTextureSize;
 }
 
 void UvUnwrapper::unwrap()
@@ -478,7 +596,7 @@ void UvUnwrapper::unwrap()
         std::vector<std::vector<size_t>> islands;
         splitPartitionToIslands(group.second, islands);
         for (const auto &island: islands)
-            unwrapSingleIsland(island);
+            unwrapSingleIsland(island, group.first);
     }
     
     calculateSizeAndRemoveInvalidCharts();

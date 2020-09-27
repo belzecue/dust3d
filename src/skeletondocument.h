@@ -1,3 +1,4 @@
+
 #ifndef DUST3D_SKELETON_DOCUMENT_H
 #define DUST3D_SKELETON_DOCUMENT_H
 #include <QUuid>
@@ -8,18 +9,24 @@
 #include <QByteArray>
 #include "bonemark.h"
 #include "theme.h"
-#include "meshloader.h"
-#include "cuttemplate.h"
+#include "model.h"
+#include "cutface.h"
+#include "parttarget.h"
+#include "partbase.h"
+#include "preferences.h"
 
 class SkeletonNode
 {
 public:
     SkeletonNode(const QUuid &withId=QUuid()) :
-        x(0),
-        y(0),
-        z(0),
         radius(0),
-        boneMark(BoneMark::None)
+        boneMark(BoneMark::None),
+        cutRotation(0.0),
+        cutFace(CutFace::Quad),
+        hasCutFaceSettings(false),
+        m_x(0),
+        m_y(0),
+        m_z(0)
     {
         id = withId.isNull() ? QUuid::createUuid() : withId;
     }
@@ -31,15 +38,93 @@ public:
             toRadius = 1;
         radius = toRadius;
     }
+    void setCutRotation(float toRotation)
+    {
+        if (toRotation < -1)
+            toRotation = -1;
+        else if (toRotation > 1)
+            toRotation = 1;
+        cutRotation = toRotation;
+        hasCutFaceSettings = true;
+    }
+    void setCutFace(CutFace face)
+    {
+        cutFace = face;
+        cutFaceLinkedId = QUuid();
+        hasCutFaceSettings = true;
+    }
+    void setCutFaceLinkedId(const QUuid &linkedId)
+    {
+        if (linkedId.isNull()) {
+            clearCutFaceSettings();
+            return;
+        }
+        cutFace = CutFace::UserDefined;
+        cutFaceLinkedId = linkedId;
+        hasCutFaceSettings = true;
+    }
+    void clearCutFaceSettings()
+    {
+        cutFace = CutFace::Quad;
+        cutFaceLinkedId = QUuid();
+        cutRotation = 0;
+        hasCutFaceSettings = false;
+    }
+    float getX(bool rotated=false) const
+    {
+        if (rotated)
+            return m_y;
+        return m_x;
+    }
+    float getY(bool rotated=false) const
+    {
+        if (rotated)
+            return m_x;
+        return m_y;
+    }
+    float getZ(bool rotated=false) const
+    {
+        (void) rotated;
+        return m_z;
+    }
+    void setX(float x)
+    {
+        m_x = x;
+    }
+    void setY(float y)
+    {
+        m_y = y;
+    }
+    void setZ(float z)
+    {
+        m_z = z;
+    }
+    void addX(float x)
+    {
+        m_x += x;
+    }
+    void addY(float y)
+    {
+        m_y += y;
+    }
+    void addZ(float z)
+    {
+        m_z += z;
+    }
     QUuid id;
     QUuid partId;
     QString name;
-    float x;
-    float y;
-    float z;
     float radius;
     BoneMark boneMark;
+    float cutRotation;
+    CutFace cutFace;
+    QUuid cutFaceLinkedId;
+    bool hasCutFaceSettings;
     std::vector<QUuid> edgeIds;
+private:
+    float m_x;
+    float m_y;
+    float m_z;
 };
 
 class SkeletonEdge
@@ -76,18 +161,28 @@ public:
     bool disabled;
     bool xMirrored;
     bool zMirrored;
+    PartBase base;
     float deformThickness;
     float deformWidth;
     bool rounded;
+    bool chamfered;
     QColor color;
     bool hasColor;
     QUuid componentId;
     std::vector<QUuid> nodeIds;
     bool dirty;
     float cutRotation;
-    std::vector<QVector2D> cutTemplate;
-    bool cutTemplateChanged;
+    CutFace cutFace;
+    QUuid cutFaceLinkedId;
     QUuid materialId;
+    PartTarget target;
+    float colorSolubility;
+    float deformMapScale;
+    QUuid deformMapImageId;
+    float hollowThickness;
+    bool countershaded;
+    bool gridded;
+    QUuid fillMeshLinkedId;
     SkeletonPart(const QUuid &withId=QUuid()) :
         visible(true),
         locked(false),
@@ -95,17 +190,84 @@ public:
         disabled(false),
         xMirrored(false),
         zMirrored(false),
+        base(PartBase::Average),
         deformThickness(1.0),
         deformWidth(1.0),
         rounded(false),
-        color(Theme::white),
+        chamfered(false),
+        color(Preferences::instance().partColor()),
         hasColor(false),
         dirty(true),
         cutRotation(0.0),
-        cutTemplate(CutTemplateToPoints(CutTemplate::Quad)),
-        cutTemplateChanged(false)
+        cutFace(CutFace::Quad),
+        target(PartTarget::Model),
+        colorSolubility(0.0),
+        deformMapScale(1.0),
+        hollowThickness(0.0),
+        countershaded(false),
+        gridded(false)
     {
         id = withId.isNull() ? QUuid::createUuid() : withId;
+    }
+    bool hasPolyFunction() const
+    {
+        return PartTarget::Model == target;
+    }
+    bool hasSubdivFunction() const
+    {
+        return PartTarget::Model == target && fillMeshLinkedId.isNull();
+    }
+    bool hasRoundEndFunction() const
+    {
+        return PartTarget::Model == target && fillMeshLinkedId.isNull();
+    }
+    bool hasMirrorFunction() const
+    {
+        return PartTarget::Model == target && fillMeshLinkedId.isNull();
+    }
+    bool hasChamferFunction() const
+    {
+        return PartTarget::Model == target && fillMeshLinkedId.isNull();
+    }
+    bool hasRotationFunction() const
+    {
+        return PartTarget::Model == target;
+    }
+    bool hasHollowFunction() const
+    {
+        return PartTarget::Model == target && fillMeshLinkedId.isNull();
+    }
+    bool hasCutFaceFunction() const
+    {
+        return PartTarget::Model == target && fillMeshLinkedId.isNull();
+    }
+    bool hasLayerFunction() const
+    {
+        return PartTarget::Model == target;
+    }
+    bool hasTargetFunction() const
+    {
+        return fillMeshLinkedId.isNull();
+    }
+    bool hasBaseFunction() const
+    {
+        return PartTarget::Model == target && fillMeshLinkedId.isNull();
+    }
+    bool hasCombineModeFunction() const
+    {
+        return PartTarget::Model == target;
+    }
+    bool hasDeformFunction() const
+    {
+        return PartTarget::Model == target;
+    }
+    bool hasDeformImageFunction() const
+    {
+        return hasDeformFunction() && fillMeshLinkedId.isNull();
+    }
+    bool hasColorFunction() const
+    {
+        return PartTarget::Model == target && fillMeshLinkedId.isNull();
     }
     void setDeformThickness(float toThickness)
     {
@@ -131,10 +293,19 @@ public:
             toRotation = 1;
         cutRotation = toRotation;
     }
-    void setCutTemplate(std::vector<QVector2D> points)
+    void setCutFace(CutFace face)
     {
-        cutTemplate = points;
-        cutTemplateChanged = true;
+        cutFace = face;
+        cutFaceLinkedId = QUuid();
+    }
+    void setCutFaceLinkedId(const QUuid &linkedId)
+    {
+        if (linkedId.isNull()) {
+            setCutFace(CutFace::Quad);
+            return;
+        }
+        cutFace = CutFace::UserDefined;
+        cutFaceLinkedId = linkedId;
     }
     bool deformThicknessAdjusted() const
     {
@@ -148,13 +319,33 @@ public:
     {
         return deformThicknessAdjusted() || deformWidthAdjusted();
     }
+    bool deformMapScaleAdjusted() const
+    {
+        return fabs(deformMapScale - 1.0) >= 0.01;
+    }
+    bool deformMapAdjusted() const
+    {
+        return deformMapScaleAdjusted() || !deformMapImageId.isNull();
+    }
+    bool colorSolubilityAdjusted() const
+    {
+        return fabs(colorSolubility - 0.0) >= 0.01;
+    }
     bool cutRotationAdjusted() const
     {
         return fabs(cutRotation - 0.0) >= 0.01;
     }
-    bool cutTemplateAdjusted() const
+    bool hollowThicknessAdjusted() const
     {
-        return cutTemplateChanged;
+        return fabs(hollowThickness - 0.0) >= 0.01;
+    }
+    bool cutFaceAdjusted() const
+    {
+        return cutFace != CutFace::Quad;
+    }
+    bool cutAdjusted() const
+    {
+        return cutRotationAdjusted() || cutFaceAdjusted() || hollowThicknessAdjusted();
     }
     bool materialAdjusted() const
     {
@@ -172,38 +363,45 @@ public:
         disabled = other.disabled;
         xMirrored = other.xMirrored;
         zMirrored = other.zMirrored;
+        base = other.base;
         deformThickness = other.deformThickness;
         deformWidth = other.deformWidth;
         rounded = other.rounded;
+        chamfered = other.chamfered;
         color = other.color;
         hasColor = other.hasColor;
         cutRotation = other.cutRotation;
-        cutTemplate = other.cutTemplate;
-        cutTemplateChanged = other.cutTemplateChanged;
+        cutFace = other.cutFace;
+        cutFaceLinkedId = other.cutFaceLinkedId;
         componentId = other.componentId;
         dirty = other.dirty;
         materialId = other.materialId;
+        target = other.target;
+        colorSolubility = other.colorSolubility;
+        countershaded = other.countershaded;
     }
-    void updatePreviewMesh(MeshLoader *previewMesh)
+    void updatePreviewMesh(Model *previewMesh)
     {
         delete m_previewMesh;
         m_previewMesh = previewMesh;
     }
-    MeshLoader *takePreviewMesh() const
+    Model *takePreviewMesh() const
     {
         if (nullptr == m_previewMesh)
             return nullptr;
-        return new MeshLoader(*m_previewMesh);
+        return new Model(*m_previewMesh);
     }
 private:
     Q_DISABLE_COPY(SkeletonPart);
-    MeshLoader *m_previewMesh = nullptr;
+    Model *m_previewMesh = nullptr;
 };
 
 enum class SkeletonDocumentEditMode
 {
     Add = 0,
     Select,
+    Mark,
+    Paint,
     Drag,
     ZoomIn,
     ZoomOut
@@ -220,9 +418,6 @@ class SkeletonDocument : public QObject
 {
     Q_OBJECT
 public:
-    float originX = 0;
-    float originY = 0;
-    float originZ = 0;
     SkeletonDocumentEditMode editMode = SkeletonDocumentEditMode::Select;
     bool xlocked = false;
     bool ylocked = false;
@@ -239,6 +434,7 @@ public:
     const SkeletonPart *findPart(QUuid partId) const;
     const SkeletonEdge *findEdgeByNodes(QUuid firstNodeId, QUuid secondNodeId) const;
     void findAllNeighbors(QUuid nodeId, std::set<QUuid> &neighbors) const;
+    bool isNodeConnectable(QUuid nodeId) const;
     
     virtual bool undoable() const = 0;
     virtual bool redoable() const = 0;
@@ -248,18 +444,67 @@ public:
     virtual bool isEdgeEditable(QUuid edgeId) const = 0;
     virtual bool isNodeDeactivated(QUuid nodeId) const
     {
+        (void) nodeId;
         return false;
     };
     virtual bool isEdgeDeactivated(QUuid edgeId) const
     {
+        (void) edgeId;
         return false;
     };
     virtual void copyNodes(std::set<QUuid> nodeIdSet) const = 0;
+    
+    float getOriginX(bool rotated=false) const
+    {
+        if (rotated)
+            return m_originY;
+        return m_originX;
+    }
+    float getOriginY(bool rotated=false) const
+    {
+        if (rotated)
+            return m_originX;
+        return m_originY;
+    }
+    float getOriginZ(bool rotated=false) const
+    {
+        (void) rotated;
+        return m_originZ;
+    }
+    void setOriginX(float originX)
+    {
+        m_originX = originX;
+    }
+    void setOriginY(float originY)
+    {
+        m_originY = originY;
+    }
+    void setOriginZ(float originZ)
+    {
+        m_originZ = originZ;
+    }
+    void addOriginX(float originX)
+    {
+        m_originX += originX;
+    }
+    void addOriginY(float originY)
+    {
+        m_originY += originY;
+    }
+    void addOriginZ(float originZ)
+    {
+        m_originZ += originZ;
+    }
     
 public slots:
     virtual void undo() = 0;
     virtual void redo() = 0;
     virtual void paste() = 0;
+    
+private:
+    float m_originX = 0;
+    float m_originY = 0;
+    float m_originZ = 0;
 };
 
 #endif

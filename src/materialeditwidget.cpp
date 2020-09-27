@@ -16,12 +16,10 @@
 #include "imageforever.h"
 #include "util.h"
 
-QPushButton *MaterialEditWidget::createMapButton()
+ImagePreviewWidget *MaterialEditWidget::createMapButton()
 {
-    QPushButton *mapButton = new QPushButton;
+    ImagePreviewWidget *mapButton = new ImagePreviewWidget;
     mapButton->setFixedSize(Theme::partPreviewImageSize * 2, Theme::partPreviewImageSize * 2);
-    mapButton->setFlat(true);
-    mapButton->setAutoFillBackground(true);
     updateMapButtonBackground(mapButton, nullptr);
     return mapButton;
 }
@@ -42,12 +40,15 @@ MaterialEditWidget::MaterialEditWidget(const Document *document, QWidget *parent
     QDialog(parent),
     m_document(document)
 {
+    setWindowFlags(windowFlags() | Qt::WindowStaysOnTopHint);
+    
     m_layers.resize(1);
 
     m_previewWidget = new ModelWidget(this);
     m_previewWidget->setMinimumSize(128, 128);
     m_previewWidget->resize(512, 512);
     m_previewWidget->move(-128, -128);
+    m_previewWidget->enableEnvironmentLight();
     
     QFont nameFont;
     nameFont.setWeight(QFont::Light);
@@ -64,8 +65,8 @@ MaterialEditWidget::MaterialEditWidget(const Document *document, QWidget *parent
         item.forWhat = (TextureType)i;
         m_layers[0].maps.push_back(item);
         
-        QPushButton *imageButton = createMapButton();
-        connect(imageButton, &QPushButton::clicked, [=]() {
+        ImagePreviewWidget *imageButton = createMapButton();
+        connect(imageButton, &ImagePreviewWidget::clicked, [=]() {
             QImage *image = pickImage();
             if (nullptr == image)
                 return;
@@ -121,6 +122,30 @@ MaterialEditWidget::MaterialEditWidget(const Document *document, QWidget *parent
     QPushButton *saveButton = new QPushButton(tr("Save"));
     connect(saveButton, &QPushButton::clicked, this, &MaterialEditWidget::save);
     saveButton->setDefault(true);
+    
+    FloatNumberWidget *tileScaleWidget = new FloatNumberWidget;
+    tileScaleWidget->setItemName(tr("Tile Scale"));
+    tileScaleWidget->setRange(0.01, 1.0);
+    tileScaleWidget->setValue(m_layers[0].tileScale);
+    
+    m_tileScaleSlider = tileScaleWidget;
+    
+    connect(tileScaleWidget, &FloatNumberWidget::valueChanged, [=](float value) {
+        m_layers[0].tileScale = value;
+        emit layersAdjusted();
+    });
+    
+    QPushButton *tileScaleEraser = new QPushButton(QChar(fa::eraser));
+    Theme::initAwesomeToolButton(tileScaleEraser);
+    
+    connect(tileScaleEraser, &QPushButton::clicked, [=]() {
+        tileScaleWidget->setValue(1.0);
+    });
+    
+    QHBoxLayout *tileScaleLayout = new QHBoxLayout;
+    tileScaleLayout->addWidget(tileScaleEraser);
+    tileScaleLayout->addWidget(tileScaleWidget);
+    tileScaleLayout->addStretch();
 
     QHBoxLayout *baseInfoLayout = new QHBoxLayout;
     baseInfoLayout->addWidget(new QLabel(tr("Name")));
@@ -132,6 +157,7 @@ MaterialEditWidget::MaterialEditWidget(const Document *document, QWidget *parent
     mainLayout->addLayout(paramtersLayout);
     mainLayout->addStretch();
     mainLayout->addWidget(Theme::createHorizontalLineWidget());
+    mainLayout->addLayout(tileScaleLayout);
     mainLayout->addLayout(baseInfoLayout);
 
     setLayout(mainLayout);
@@ -149,14 +175,12 @@ MaterialEditWidget::MaterialEditWidget(const Document *document, QWidget *parent
     updateTitle();
 }
 
-void MaterialEditWidget::updateMapButtonBackground(QPushButton *button, const QImage *image)
+void MaterialEditWidget::updateMapButtonBackground(ImagePreviewWidget *button, const QImage *image)
 {
-    QPalette palette;
-    if (nullptr != image)
-        palette.setBrush(button->backgroundRole(), QBrush(QPixmap::fromImage(*image)));
+    if (nullptr == image)
+        button->updateImage(QImage());
     else
-        palette.setBrush(button->backgroundRole(), QBrush(Qt::black));
-    button->setPalette(palette);
+        button->updateImage(*image);
 }
 
 void MaterialEditWidget::reject()
@@ -170,7 +194,8 @@ void MaterialEditWidget::closeEvent(QCloseEvent *event)
         QMessageBox::StandardButton answer = QMessageBox::question(this,
             APP_NAME,
             tr("Do you really want to close while there are unsaved changes?"),
-            QMessageBox::Yes | QMessageBox::No);
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
         if (answer != QMessageBox::Yes) {
             event->ignore();
             return;
@@ -274,6 +299,7 @@ void MaterialEditWidget::setEditMaterialLayers(std::vector<MaterialLayer> layers
     }
     if (!layers.empty()) {
         for (const auto &layer: layers) {
+            m_layers[0].tileScale = layer.tileScale;
             for (const auto &mapItem: layer.maps) {
                 int index = (int)mapItem.forWhat - 1;
                 if (index >= 0 && index < (int)TextureType::Count - 1) {
@@ -281,6 +307,7 @@ void MaterialEditWidget::setEditMaterialLayers(std::vector<MaterialLayer> layers
                 }
             }
         }
+        m_tileScaleSlider->setValue(m_layers[0].tileScale);
     }
     for (int i = 1; i < (int)TextureType::Count; i++) {
         updateMapButtonBackground(m_textureMapButtons[i - 1], ImageForever::get(m_layers[0].maps[i - 1].imageId));

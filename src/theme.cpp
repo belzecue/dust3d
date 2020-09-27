@@ -14,13 +14,15 @@
 
 // Blue
 // 0x2a, 0x5a, 0xac
+// 0x0d, 0xa9, 0xf1
 
 // White
 // 0xf7, 0xd9, 0xc8
 
 QColor Theme::red = QColor(0xfc, 0x66, 0x21);
 QColor Theme::green = QColor(0xaa, 0xeb, 0xc4);
-QColor Theme::blue = QColor(0x2a, 0x5a, 0xac);
+//QColor Theme::blue = QColor(0x2a, 0x5a, 0xac);
+QColor Theme::blue = QColor(0x0d, 0xa9, 0xf1);
 QColor Theme::white = QColor(0xf7, 0xd9, 0xc8);
 QColor Theme::black = QColor(0x25,0x25,0x25);
 QColor Theme::dark = QColor(0x19,0x19,0x19);
@@ -39,6 +41,7 @@ int Theme::miniIconFontSize = 0;
 int Theme::miniIconSize = 0;
 int Theme::partPreviewImageSize = 0;
 int Theme::materialPreviewImageSize = 0;
+int Theme::cutFacePreviewImageSize = 0;
 int Theme::posePreviewImageSize = 0;
 int Theme::motionPreviewImageSize = 0;
 int Theme::sidebarPreferredWidth = 0;
@@ -50,16 +53,15 @@ void Theme::initAwsomeBaseSizes()
     Theme::toolIconFontSize = fontMetrics.height();
     
     Theme::toolIconSize = (int)(Theme::toolIconFontSize * 1.5);
-    Theme::miniIconFontSize = (int)(Theme::toolIconFontSize * 0.64);
+    Theme::miniIconFontSize = (int)(Theme::toolIconFontSize * 0.7);
     Theme::miniIconSize = (int)(Theme::miniIconFontSize * 1.67);
     Theme::partPreviewImageSize = (Theme::miniIconSize * 3);
-    Theme::materialPreviewImageSize = 75;
-    Theme::posePreviewImageSize = 75;
-    Theme::motionPreviewImageSize = 75;
-    Theme::sidebarPreferredWidth = 200;
+    Theme::sidebarPreferredWidth = Theme::partPreviewImageSize * 4; //3.7;
+    Theme::posePreviewImageSize = Theme::sidebarPreferredWidth * 0.4;
+    Theme::materialPreviewImageSize = Theme::posePreviewImageSize;
+    Theme::cutFacePreviewImageSize = Theme::posePreviewImageSize;
+    Theme::motionPreviewImageSize = Theme::posePreviewImageSize;
     Theme::normalButtonSize = Theme::toolIconSize * 2;
-    
-    qDebug() << "Theme::toolIconFontSize:" << Theme::toolIconFontSize;
 }
 
 QtAwesome *Theme::awesome()
@@ -100,7 +102,7 @@ void Theme::initAwesomeButton(QPushButton *button)
 {
     button->setFont(Theme::awesome()->font(Theme::toolIconFontSize));
     button->setFixedSize(Theme::toolIconSize, Theme::toolIconSize);
-    button->setStyleSheet("QPushButton {color: #f7d9c8}");
+    button->setStyleSheet("QPushButton {color: " + Theme::white.name() + "}");
     button->setFocusPolicy(Qt::NoFocus);
 }
 
@@ -108,14 +110,14 @@ void Theme::initAwesomeSmallButton(QPushButton *button)
 {
     button->setFont(Theme::awesome()->font(Theme::toolIconFontSize * 0.7));
     button->setFixedSize(Theme::toolIconSize * 0.75, Theme::toolIconSize * 0.75);
-    button->setStyleSheet("QPushButton {color: #f7d9c8}");
+    button->setStyleSheet("QPushButton {color: " + Theme::white.name() + "}");
     button->setFocusPolicy(Qt::NoFocus);
 }
 
 void Theme::initAwesomeLabel(QLabel *label)
 {
     label->setFont(Theme::awesome()->font(Theme::toolIconFontSize));
-    label->setStyleSheet("QLabel {color: #f7d9c8}");
+    label->setStyleSheet("QLabel {color: " + Theme::white.name() + "}");
 }
 
 void Theme::initAwesomeMiniButton(QPushButton *button)
@@ -125,7 +127,7 @@ void Theme::initAwesomeMiniButton(QPushButton *button)
     button->setFocusPolicy(Qt::NoFocus);
 }
 
-void Theme::updateAwesomeMiniButton(QPushButton *button, QChar icon, bool highlighted, bool unnormal)
+void Theme::updateAwesomeMiniButton(QPushButton *button, QChar icon, bool highlighted, bool enabled, bool unnormal)
 {
     button->setText(icon);
     QColor color;
@@ -147,6 +149,10 @@ void Theme::updateAwesomeMiniButton(QPushButton *button, QChar icon, bool highli
         color.setHsv(color.hue(), color.saturation() / 5, color.value() * 2 / 3);
         color = color.toRgb();
     }
+    
+    if (!enabled) {
+        color = QColor(42, 42, 42);
+    }
 
     button->setStyleSheet("QPushButton {border: none; background: none; color: " + color.name() + ";}");
 }
@@ -154,7 +160,7 @@ void Theme::updateAwesomeMiniButton(QPushButton *button, QChar icon, bool highli
 void Theme::initAwesomeToolButtonWithoutFont(QPushButton *button)
 {
     button->setFixedSize(Theme::toolIconSize / 2, Theme::toolIconSize / 2);
-    button->setStyleSheet("QPushButton {color: #f7d9c8}");
+    button->setStyleSheet("QPushButton {color: " + Theme::white.name() + "}");
     button->setFocusPolicy(Qt::NoFocus);
 }
 
@@ -171,8 +177,15 @@ void Theme::initToolButton(QPushButton *button)
     font.setBold(false);
     button->setFont(font);
     button->setFixedHeight(Theme::toolIconSize * 0.75);
-    button->setStyleSheet("QPushButton {color: #f7d9c8}");
+    button->setStyleSheet("QPushButton {color: " + Theme::white.name() + "}");
     button->setFocusPolicy(Qt::NoFocus);
+}
+
+void Theme::initCheckbox(QCheckBox *checkbox)
+{
+    QPalette palette = checkbox->palette();
+    palette.setColor(QPalette::Background, Theme::white);
+    checkbox->setPalette(palette);
 }
 
 QWidget *Theme::createHorizontalLineWidget()

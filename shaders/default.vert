@@ -1,3 +1,4 @@
+#version 110
 attribute vec4 vertex;
 attribute vec3 normal;
 attribute vec3 color;
@@ -5,7 +6,9 @@ attribute vec2 texCoord;
 attribute float metalness;
 attribute float roughness;
 attribute vec3 tangent;
+attribute float alpha;
 varying vec3 vert;
+varying vec3 vertRaw;
 varying vec3 vertNormal;
 varying vec3 vertColor;
 varying vec2 vertTexCoord;
@@ -15,11 +18,13 @@ varying vec3 cameraPos;
 varying vec3 firstLightPos;
 varying vec3 secondLightPos;
 varying vec3 thirdLightPos;
+varying float vertAlpha;
 uniform mat4 projectionMatrix;
 uniform mat4 modelMatrix;
 uniform mat3 normalMatrix;
 uniform mat4 viewMatrix;
-uniform highp int normalMapEnabled;
+uniform int normalMapEnabled;
+uniform vec3 eyePos;
 
 mat3 transpose(mat3 m) 
 {
@@ -31,9 +36,11 @@ mat3 transpose(mat3 m)
 void main()
 {
     vert = (modelMatrix * vertex).xyz;
+    vertRaw = vert;
     vertNormal = normalize((modelMatrix * vec4(normal, 1.0)).xyz);
     vertColor = color;
-    cameraPos = vec3(0, 0, -2.1);
+    vertAlpha = alpha;
+    cameraPos = eyePos;
 
     firstLightPos = vec3(5.0, 5.0, 5.0);
     secondLightPos = vec3(-5.0, 5.0, 5.0);

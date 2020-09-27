@@ -5,16 +5,26 @@
 #include <QDebug>
 #include <QtGlobal>
 #include <QSurfaceFormat>
+#include <QSettings>
+#include <QTranslator>
+#include <qtsingleapplication.h>
 #include "documentwindow.h"
 #include "theme.h"
 #include "version.h"
 
 int main(int argc, char ** argv)
 {
-    QApplication app(argc, argv);
+    QtSingleApplication app(argc, argv);
+    if (app.sendMessage("activateFromAnotherInstance"))
+        return 0;
+    
+    QTranslator translator;
+    if (translator.load(QLocale(), QLatin1String("dust3d"), QLatin1String("_"), QLatin1String(":/languages")))
+        app.installTranslator(&translator);
     
     QSurfaceFormat format = QSurfaceFormat::defaultFormat();
-    format.setProfile(QSurfaceFormat::OpenGLContextProfile::CompatibilityProfile);
+    format.setProfile(QSurfaceFormat::OpenGLContextProfile::CoreProfile);
+    format.setVersion(3, 3);
     QSurfaceFormat::setDefaultFormat(format);
     
     // QuantumCD/Qt 5 Dark Fusion Palette
@@ -34,11 +44,13 @@ int main(int argc, char ** argv)
     darkPalette.setColor(QPalette::BrightText, Theme::red);
     darkPalette.setColor(QPalette::Link, QColor(42, 130, 218));
     darkPalette.setColor(QPalette::Highlight, Theme::red);
-    darkPalette.setColor(QPalette::HighlightedText, Theme::black);
+    darkPalette.setColor(QPalette::HighlightedText, Theme::black);    
     qApp->setPalette(darkPalette);
     //qApp->setStyleSheet("QToolTip { color: #ffffff; background-color: #fc6621; border: 1px solid white; }");
     
     QCoreApplication::setApplicationName(APP_NAME);
+    QCoreApplication::setOrganizationName(APP_COMPANY);
+    QCoreApplication::setOrganizationDomain(APP_HOMEPAGE_URL);
     
     QFont font;
     font.setWeight(QFont::Light);
@@ -48,7 +60,67 @@ int main(int argc, char ** argv)
     
     Theme::initAwsomeBaseSizes();
     
-    DocumentWindow::createDocumentWindow();
+    DocumentWindow *firstWindow = DocumentWindow::createDocumentWindow();
+    
+    qDebug() << "Language:" << QLocale().name();
+    
+    QStringList openFileList;
+    QStringList waitingExportList;
+    for (int i = 1; i < argc; ++i) {
+        if ('-' == argv[i][0]) {
+            if (0 == strcmp(argv[i], "-output") ||
+                    0 == strcmp(argv[i], "-o")) {
+                ++i;
+                if (i < argc)
+                    waitingExportList.append(argv[i]);
+                continue;
+            }
+            qDebug() << "Unknown option:" << argv[i];
+            continue;
+        }
+        QString arg = argv[i];
+        if (arg.endsWith(".ds3")) {
+            openFileList.append(arg);
+            continue;
+        }
+    }
+    
+    int finishedExportFileNum = 0;
+    int totalExportFileNum = 0;
+    int succeedExportNum = 0;
+    if (!openFileList.empty()) {
+        std::vector<DocumentWindow *> windowList = {firstWindow};
+        for (int i = 1; i < openFileList.size(); ++i) {
+            windowList.push_back(DocumentWindow::createDocumentWindow());
+        }
+        if (!waitingExportList.empty() &&
+                openFileList.size() == 1) {
+            totalExportFileNum = openFileList.size() * waitingExportList.size();
+            for (int i = 0; i < openFileList.size(); ++i) {
+                QObject::connect(windowList[i], &DocumentWindow::waitingExportFinished, &app, [&](const QString &filename, bool isSuccessful) {
+                    qDebug() << "Export to" << filename << (isSuccessful ? "isSuccessful" : "failed");
+                    ++finishedExportFileNum;
+                    if (isSuccessful)
+                        ++succeedExportNum;
+                    if (finishedExportFileNum == totalExportFileNum) {
+                        if (succeedExportNum == totalExportFileNum) {
+                            app.exit();
+                            return;
+                        }
+                        app.exit(1);
+                        return;
+                    }
+                });
+            }
+            for (int i = 0; i < openFileList.size(); ++i) {
+                QObject::connect(windowList[i]->document(), &Document::exportReady, windowList[i], &DocumentWindow::checkExportWaitingList);
+                windowList[i]->setExportWaitingList(waitingExportList);
+            }
+        }
+        for (int i = 0; i < openFileList.size(); ++i) {
+            windowList[i]->openPathAs(openFileList[i], openFileList[i]);
+        }
+    }
     
     return app.exec();
 }

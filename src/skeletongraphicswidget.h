@@ -25,9 +25,14 @@ public:
     SkeletonGraphicsOriginItem(SkeletonProfile profile=SkeletonProfile::Unknown) :
         m_profile(profile),
         m_hovered(false),
-        m_checked(false)
+        m_checked(false),
+        m_rotated(false)
     {
         setData(0, "origin");
+    }
+    void setRotated(bool rotated)
+    {
+        m_rotated = rotated;
     }
     void updateAppearance()
     {
@@ -38,7 +43,7 @@ public:
         case SkeletonProfile::Unknown:
             break;
         case SkeletonProfile::Main:
-            color = Theme::red;
+            color = m_rotated ? Theme::blue : Theme::red;
             break;
         case SkeletonProfile::Side:
             color = Theme::green;
@@ -99,6 +104,7 @@ private:
     bool m_hovered;
     bool m_checked;
     QPointF m_origin;
+    bool m_rotated;
 };
 
 class SkeletonGraphicsSelectionItem : public QGraphicsRectItem
@@ -118,6 +124,72 @@ public:
     }
 };
 
+class SkeletonGraphicsMarkerItem : public QGraphicsPolygonItem
+{
+public:
+    SkeletonGraphicsMarkerItem()
+    {
+        updateAppearance();
+    }
+    void addPoint(const QPointF &point)
+    {
+        m_polygon.append(point);
+        setPolygon(m_polygon);
+    }
+    void clear()
+    {
+        m_polygon.clear();
+        setPolygon(m_polygon);
+    }
+    QColor color()
+    {
+        return m_mainProfile ? Theme::red : Theme::green;
+    }
+    bool isMainProfile()
+    {
+        return m_mainProfile;
+    }
+    void toggleProfile()
+    {
+        m_mainProfile = !m_mainProfile;
+        updateAppearance();
+    }
+    void save()
+    {
+        m_previousPolygon = m_polygon;
+        clear();
+    }
+    const QPolygonF &previousPolygon()
+    {
+        return m_previousPolygon;
+    }
+    const QPolygonF &polygon()
+    {
+        return m_polygon;
+    }
+    void reset()
+    {
+        m_previousPolygon.clear();
+        clear();
+        if (!m_mainProfile) {
+            m_mainProfile = true;
+            updateAppearance();
+        }
+    }
+private:
+    QPolygonF m_polygon;
+    QPolygonF m_previousPolygon;
+    bool m_mainProfile = true;
+    void updateAppearance()
+    {
+        QColor penColor(color());
+        QPen pen(penColor);
+        pen.setWidth(2);
+        pen.setStyle(Qt::SolidLine);
+        setPen(pen);
+    }
+};
+
 class SkeletonGraphicsNodeItem : public QGraphicsEllipseItem
 {
 public:
@@ -126,10 +198,15 @@ public:
         m_hovered(false),
         m_checked(false),
         m_markColor(Qt::transparent),
-        m_deactivated(false)
+        m_deactivated(false),
+        m_rotated(false)
     {
         setData(0, "node");
         setRadius(32);
+    }
+    void setRotated(bool rotated)
+    {
+        m_rotated = rotated;
     }
     void updateAppearance()
     {
@@ -141,7 +218,7 @@ public:
             case SkeletonProfile::Unknown:
                 break;
             case SkeletonProfile::Main:
-                color = Theme::red;
+                color = m_rotated ? Theme::blue : Theme::red;
                 break;
             case SkeletonProfile::Side:
                 color = Theme::green;
@@ -249,6 +326,7 @@ private:
     bool m_checked;
     QColor m_markColor;
     bool m_deactivated;
+    bool m_rotated;
 };
 
 class SkeletonGraphicsEdgeItem : public QGraphicsPolygonItem
@@ -260,9 +338,14 @@ public:
         m_hovered(false),
         m_checked(false),
         m_profile(SkeletonProfile::Unknown),
-        m_deactivated(false)
+        m_deactivated(false),
+        m_rotated(false)
     {
         setData(0, "edge");
+    }
+    void setRotated(bool rotated)
+    {
+        m_rotated = rotated;
     }
     void setEndpoints(SkeletonGraphicsNodeItem *first, SkeletonGraphicsNodeItem *second)
     {
@@ -293,7 +376,8 @@ public:
         float dy = 2 * cos(radAngle);
         QPointF offset1 = QPointF(dx, dy);
         QPointF offset2 = QPointF(-dx, -dy);
-        polygon << line.p1() + offset1 << line.p1() + offset2 << line.p2() + offset2 << line.p2() + offset1;
+        //polygon << line.p1() + offset1 << line.p1() + offset2 << line.p2() + offset2 << line.p2() + offset1;
+        polygon << line.p1() + offset1 << line.p1() + offset2 << line.p2();
         setPolygon(polygon);
         
         QColor color = Qt::gray;
@@ -304,7 +388,7 @@ public:
             case SkeletonProfile::Unknown:
                 break;
             case SkeletonProfile::Main:
-                color = Theme::red;
+                color = m_rotated ? Theme::blue : Theme::red;
                 break;
             case SkeletonProfile::Side:
                 color = Theme::green;
@@ -345,6 +429,11 @@ public:
         m_deactivated = deactivated;
         updateAppearance();
     }
+    void reverse()
+    {
+        std::swap(m_firstItem, m_secondItem);
+        updateAppearance();
+    }
     bool deactivated()
     {
         return m_deactivated;
@@ -366,16 +455,20 @@ private:
     bool m_checked;
     SkeletonProfile m_profile;
     bool m_deactivated;
+    bool m_rotated;
 };
 
 class SkeletonGraphicsWidget : public QGraphicsView
 {
     Q_OBJECT
+public:
+    ~SkeletonGraphicsWidget();
 signals:
     void addNode(float x, float y, float z, float radius, QUuid fromNodeId);
     void scaleNodeByAddRadius(QUuid nodeId, float amount);
     void moveNodeBy(QUuid nodeId, float x, float y, float z);
     void removeNode(QUuid nodeId);
+    void removePart(QUuid partId);
     void setEditMode(SkeletonDocumentEditMode mode);
     void removeEdge(QUuid edgeId);
     void addEdge(QUuid fromNodeId, QUuid toNodeId);
@@ -387,10 +480,10 @@ signals:
     void changeTurnaround();
     void batchChangeBegin();
     void batchChangeEnd();
-    void save();
     void open();
     void exportResult();
     void breakEdge(QUuid edgeId);
+    void reverseEdge(QUuid edgeId);
     void moveOriginBy(float x, float y, float z);
     void partChecked(QUuid partId);
     void partUnchecked(QUuid partId);
@@ -401,17 +494,27 @@ signals:
     void setPartXmirrorState(QUuid partId, bool mirrored);
     void setPartRoundState(QUuid partId, bool rounded);
     void setPartWrapState(QUuid partId, bool wrapped);
+    void setPartChamferState(QUuid partId, bool chamfered);
+    void setPartColorState(QUuid partId, bool hasColor, QColor color);
     void setXlockState(bool locked);
     void setYlockState(bool locked);
     void setZlockState(bool locked);
     void setNodeOrigin(QUuid nodeId, float x, float y, float z);
     void setNodeBoneMark(QUuid nodeId, BoneMark mark);
+    void clearNodeCutFaceSettings(QUuid nodeId);
+    void showCutFaceSettingPopup(const QPoint &globalPos, std::set<QUuid> nodeIds);
     void zoomRenderedModelBy(float delta);
     void switchNodeXZ(QUuid nodeId);
     void switchChainSide(std::set<QUuid> nodeIds);
     void enableAllPositionRelatedLocks();
     void disableAllPositionRelatedLocks();
     void shortcutToggleWireframe();
+    void partComponentChecked(QUuid partId);
+    void showOrHideAllComponents();
+    void shortcutToggleFlatShading();
+    void shortcutToggleRotation();
+    void createGriddedPartsFromNodes(const std::set<QUuid> &nodeIds);
+    void addPartByPolygons(const QPolygonF &mainProfile, const QPolygonF &sideProfile, const QSizeF &canvasSize);
 public:
     SkeletonGraphicsWidget(const SkeletonDocument *document);
     std::map<QUuid, std::pair<SkeletonGraphicsNodeItem *, SkeletonGraphicsNodeItem *>> nodeItemMap;
@@ -426,6 +529,8 @@ public:
     bool checkSkeletonItem(QGraphicsItem *item, bool checked);
     QUuid querySkeletonItemPartId(QGraphicsItem *item);
     static SkeletonProfile readSkeletonItemProfile(QGraphicsItem *item);
+    void getOtherProfileNodeItems(const std::set<SkeletonGraphicsNodeItem *> &nodeItemSet,
+        std::set<SkeletonGraphicsNodeItem *> *otherProfileNodeItemSet);
     void readMergedSkeletonNodeSetFromRangeSelection(std::set<SkeletonGraphicsNodeItem *> *nodeItemSet);
     void readSkeletonNodeAndEdgeIdSetFromRangeSelection(std::set<QUuid> *nodeIdSet, std::set<QUuid> *edgeIdSet=nullptr);
     bool readSkeletonNodeAndAnyEdgeOfNodeFromRangeSelection(SkeletonGraphicsNodeItem **nodeItem, SkeletonGraphicsEdgeItem **edgeItem);
@@ -435,10 +540,12 @@ public:
     bool hasEdgeSelection();
     bool hasNodeSelection();
     bool hasTwoDisconnectedNodesSelection();
+    bool hasCutFaceAdjustedNodesSelection();
     void setModelWidget(ModelWidget *modelWidget);
     void setNodePositionModifyOnly(bool nodePositionModifyOnly);
     void setMainProfileOnly(bool mainProfileOnly);
     bool inputWheelEventFromOtherWidget(QWheelEvent *event);
+    bool rotated(void);
 protected:
     void mouseMoveEvent(QMouseEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
@@ -455,7 +562,7 @@ public slots:
     void nodeRadiusChanged(QUuid nodeId);
     void nodeBoneMarkChanged(QUuid nodeId);
     void nodeOriginChanged(QUuid nodeId);
-    void edgeChanged(QUuid edgeId);
+    void edgeReversed(QUuid edgeId);
     void turnaroundChanged();
     void canvasResized();
     void editModeChanged();
@@ -477,7 +584,10 @@ public slots:
     void rotateAllMainProfileClockwise90DegreeAlongOrigin();
     void rotateAllMainProfileCounterclockwise90DegreeAlongOrigin();
     void removeAllContent();
+    void fadeSelected();
+    void colorizeSelected();
     void breakSelected();
+    void reverseSelectedEdges();
     void connectSelected();
     void rotateSelected(int degree);
     void zoomSelected(float delta);
@@ -503,8 +613,12 @@ public slots:
     void timeToRemoveDeferredNodesAndEdges();
     void switchSelectedXZ();
     void switchSelectedChainSide();
+    void showSelectedCutFaceSettingPopup(const QPoint &pos);
+    void clearSelectedCutFace();
+    void setRotated(bool rotated);
     void shortcutDelete();
     void shortcutAddMode();
+    //void shortcutMarkMode();
     void shortcutUndo();
     void shortcutRedo();
     void shortcutXlock();
@@ -513,9 +627,8 @@ public slots:
     void shortcutCut();
     void shortcutCopy();
     void shortcutPaste();
-    void shortcutSave();
     void shortcutSelectMode();
-    void shortcutDragMode();
+    void shortcutPaintMode();
     void shortcutZoomRenderedModelByMinus10();
     void shortcutZoomSelectedByMinus1();
     void shortcutZoomRenderedModelBy10();
@@ -535,6 +648,10 @@ public slots:
     void shortcutXmirrorOnOrOffSelectedPart();
     void shortcutSubdivedOrNotSelectedPart();
     void shortcutRoundEndOrNotSelectedPart();
+    void shortcutCheckPartComponent();
+    void shortcutChamferedOrNotSelectedPart();
+    void shortcutSelectAll();
+    void shortcutEscape();
 private slots:
     void turnaroundImageReady();
 private:
@@ -559,7 +676,7 @@ private:
     void alignSelectedToLocal(bool alignToVerticalCenter, bool alignToHorizontalCenter);
     void rotateItems(const std::set<SkeletonGraphicsNodeItem *> &nodeItems, int degree, QVector2D center);
     void rotateAllSideProfile(int degree);
-private: //need initalize
+private: //need initialize
     const SkeletonDocument *m_document;
     QGraphicsPixmapItem *m_backgroundItem;
     bool m_turnaroundChanged;
@@ -575,7 +692,9 @@ private: //need initalize
     float m_lastAddedY;
     float m_lastAddedZ;
     SkeletonGraphicsSelectionItem *m_selectionItem;
+    SkeletonGraphicsMarkerItem *m_markerItem;
     bool m_rangeSelectionStarted;
+    bool m_markerStarted;
     bool m_mouseEventFromSelf;
     bool m_moveHappened;
     int m_lastRot;
@@ -593,6 +712,8 @@ private: //need initalize
     bool m_nodePositionModifyOnly;
     bool m_mainProfileOnly;
     float m_turnaroundOpacity;
+    bool m_rotated;
+    QImage *m_backgroundImage;
 private:
     QVector3D m_ikMoveTarget;
     QUuid m_ikMoveEndEffectorId;

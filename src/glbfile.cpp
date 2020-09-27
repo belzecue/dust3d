@@ -4,12 +4,12 @@
 #include <QDataStream>
 #include <QFileInfo>
 #include <QDir>
-#include <QBuffer>
+#include <QtCore/qbuffer.h>
 #include "glbfile.h"
 #include "version.h"
 #include "util.h"
 #include "jointnodetree.h"
-#include "meshloader.h"
+#include "model.h"
 
 // Play with glTF online:
 // https://gltf-viewer.donmccurdy.com/
@@ -26,6 +26,7 @@ GlbFileWriter::GlbFileWriter(Outcome &outcome,
         const std::vector<RiggerBone> *resultRigBones,
         const std::map<int, RiggerVertexWeights> *resultRigWeights,
         const QString &filename,
+        bool textureHasTransparencySettings,
         QImage *textureImage,
         QImage *normalImage,
         QImage *ormImage,
@@ -167,8 +168,10 @@ GlbFileWriter::GlbFileWriter(Outcome &outcome,
         }
         int textureIndex = 0;
         m_json["materials"][primitiveIndex]["pbrMetallicRoughness"]["baseColorTexture"]["index"] = textureIndex++;
-        m_json["materials"][primitiveIndex]["pbrMetallicRoughness"]["metallicFactor"] = MeshLoader::m_defaultMetalness;
-        m_json["materials"][primitiveIndex]["pbrMetallicRoughness"]["roughnessFactor"] = MeshLoader::m_defaultRoughness;
+        m_json["materials"][primitiveIndex]["pbrMetallicRoughness"]["metallicFactor"] = Model::m_defaultMetalness;
+        m_json["materials"][primitiveIndex]["pbrMetallicRoughness"]["roughnessFactor"] = Model::m_defaultRoughness;
+        if (textureHasTransparencySettings)
+            m_json["materials"][primitiveIndex]["alphaMode"] = "BLEND";
         if (normalImage) {
             m_json["materials"][primitiveIndex]["normalTexture"]["index"] = textureIndex++;
         }

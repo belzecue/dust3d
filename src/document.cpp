@@ -7,15 +7,23 @@
 #include <QApplication>
 #include <QVector3D>
 #include <functional>
-#include <QBuffer>
+#include <QtCore/qbuffer.h>
+#include <QElapsedTimer>
+#include <queue>
 #include "document.h"
 #include "util.h"
 #include "snapshotxml.h"
 #include "materialpreviewsgenerator.h"
 #include "motionsgenerator.h"
 #include "skeletonside.h"
+#include "scriptrunner.h"
+#include "mousepicker.h"
+#include "imageforever.h"
+#include "contourtopartconverter.h"
 
 unsigned long Document::m_maxSnapshot = 1000;
+const float Component::defaultClothStiffness = 0.5f;
+const size_t Component::defaultClothIteration = 350;
 
 Document::Document() :
     SkeletonDocument(),
@@ -29,12 +37,16 @@ Document::Document() :
     textureMetalnessImage(nullptr),
     textureRoughnessImage(nullptr),
     textureAmbientOcclusionImage(nullptr),
+    textureHasTransparencySettings(false),
     rigType(RigType::None),
     weldEnabled(true),
+    polyCount(PolyCount::Original),
     // private
     m_isResultMeshObsolete(false),
     m_meshGenerator(nullptr),
     m_resultMesh(nullptr),
+    m_resultMeshCutFaceTransforms(nullptr),
+    m_resultMeshNodesCutFaces(nullptr),
     m_isMeshGenerationSucceed(true),
     m_batchChangeRefCount(0),
     m_currentOutcome(nullptr),
@@ -45,9 +57,8 @@ Document::Document() :
     m_postProcessedOutcome(new Outcome),
     m_resultTextureMesh(nullptr),
     m_textureImageUpdateVersion(0),
-    m_sharedContextWidget(nullptr),
     m_allPositionRelatedLocksEnabled(true),
-    m_smoothNormal(true),
+    m_smoothNormal(!Preferences::instance().flatShading()),
     m_rigGenerator(nullptr),
     m_resultRigWeightMesh(nullptr),
     m_resultRigBones(nullptr),
@@ -57,13 +68,43 @@ Document::Document() :
     m_posePreviewsGenerator(nullptr),
     m_currentRigSucceed(false),
     m_materialPreviewsGenerator(nullptr),
-    m_motionsGenerator(nullptr)
+    m_motionsGenerator(nullptr),
+    m_meshGenerationId(0),
+    m_nextMeshGenerationId(1),
+    m_scriptRunner(nullptr),
+    m_isScriptResultObsolete(false),
+    m_mousePicker(nullptr),
+    m_isMouseTargetResultObsolete(false),
+    m_paintMode(PaintMode::None),
+    m_mousePickRadius(0.2),
+    m_saveNextPaintSnapshot(false)
 {
+    connect(&Preferences::instance(), &Preferences::partColorChanged, this, &Document::applyPreferencePartColorChange);
+    connect(&Preferences::instance(), &Preferences::flatShadingChanged, this, &Document::applyPreferenceFlatShadingChange);
+    connect(&Preferences::instance(), &Preferences::textureSizeChanged, this, &Document::applyPreferenceTextureSizeChange);
+}
+
+void Document::applyPreferencePartColorChange()
+{
+    regenerateMesh();
+}
+
+void Document::applyPreferenceFlatShadingChange()
+{
+    m_smoothNormal = !Preferences::instance().flatShading();
+    regenerateMesh();
+}
+
+void Document::applyPreferenceTextureSizeChange()
+{
+    generateTexture();
 }
 
 Document::~Document()
 {
     delete m_resultMesh;
+    delete m_resultMeshCutFaceTransforms;
+    delete m_resultMeshNodesCutFaces;
     delete m_postProcessedOutcome;
     delete textureGuideImage;
     delete textureImage;
@@ -116,17 +157,35 @@ void Document::breakEdge(QUuid edgeId)
         qDebug() << "Find node failed:" << secondNodeId;
         return;
     }
-    QVector3D firstOrigin(firstNode->x, firstNode->y, firstNode->z);
-    QVector3D secondOrigin(secondNode->x, secondNode->y, secondNode->z);
+    QVector3D firstOrigin(firstNode->getX(), firstNode->getY(), firstNode->getZ());
+    QVector3D secondOrigin(secondNode->getX(), secondNode->getY(), secondNode->getZ());
     QVector3D middleOrigin = (firstOrigin + secondOrigin) / 2;
     float middleRadius = (firstNode->radius + secondNode->radius) / 2;
     removeEdge(edgeId);
-    QUuid middleNodeId = createNode(middleOrigin.x(), middleOrigin.y(), middleOrigin.z(), middleRadius, firstNodeId);
+    QUuid middleNodeId = createNode(QUuid::createUuid(), middleOrigin.x(), middleOrigin.y(), middleOrigin.z(), middleRadius, firstNodeId);
     if (middleNodeId.isNull()) {
         qDebug() << "Add middle node failed";
         return;
     }
     addEdge(middleNodeId, secondNodeId);
+}
+
+void Document::reverseEdge(QUuid edgeId)
+{
+    SkeletonEdge *edge = (SkeletonEdge *)findEdge(edgeId);
+    if (nullptr == edge) {
+        qDebug() << "Find edge failed:" << edgeId;
+        return;
+    }
+    if (edge->nodeIds.size() != 2) {
+        return;
+    }
+    std::swap(edge->nodeIds[0], edge->nodeIds[1]);
+    auto part = partMap.find(edge->partId);
+    if (part != partMap.end())
+        part->second.dirty = true;
+    emit edgeReversed(edgeId);
+    emit skeletonChanged();
 }
 
 void Document::removeEdge(QUuid edgeId)
@@ -147,6 +206,8 @@ void Document::removeEdge(QUuid edgeId)
     QUuid oldPartId = oldPart->id;
     std::vector<std::vector<QUuid>> groups;
     splitPartByEdge(&groups, edgeId);
+    std::vector<std::pair<QUuid, size_t>> newPartNodeNumMap;
+    std::vector<QUuid> newPartIds;
     for (auto groupIt = groups.begin(); groupIt != groups.end(); groupIt++) {
         const auto newUuid = QUuid::createUuid();
         SkeletonPart &part = partMap[newUuid];
@@ -171,6 +232,8 @@ void Document::removeEdge(QUuid edgeId)
             }
         }
         addPartToComponent(part.id, findComponentParentId(part.componentId));
+        newPartNodeNumMap.push_back({part.id, part.nodeIds.size()});
+        newPartIds.push_back(part.id);
         emit partAdded(part.id);
     }
     for (auto nodeIdIt = edge->nodeIds.begin(); nodeIdIt != edge->nodeIds.end(); nodeIdIt++) {
@@ -185,6 +248,18 @@ void Document::removeEdge(QUuid edgeId)
     edgeMap.erase(edgeId);
     emit edgeRemoved(edgeId);
     removePart(oldPartId);
+    
+    if (!newPartNodeNumMap.empty()) {
+        std::sort(newPartNodeNumMap.begin(), newPartNodeNumMap.end(), [&](
+                const std::pair<QUuid, size_t> &first, const std::pair<QUuid, size_t> &second) {
+            return first.second > second.second;
+        });
+        updateLinkedPart(oldPartId, newPartNodeNumMap[0].first);
+    }
+    
+    for (const auto &partId: newPartIds) {
+        checkPartGrid(partId);
+    }
     
     emit skeletonChanged();
 }
@@ -207,6 +282,8 @@ void Document::removeNode(QUuid nodeId)
     QUuid oldPartId = oldPart->id;
     std::vector<std::vector<QUuid>> groups;
     splitPartByNode(&groups, nodeId);
+    std::vector<std::pair<QUuid, size_t>> newPartNodeNumMap;
+    std::vector<QUuid> newPartIds;
     for (auto groupIt = groups.begin(); groupIt != groups.end(); groupIt++) {
         const auto newUuid = QUuid::createUuid();
         SkeletonPart &part = partMap[newUuid];
@@ -231,6 +308,8 @@ void Document::removeNode(QUuid nodeId)
             }
         }
         addPartToComponent(part.id, findComponentParentId(part.componentId));
+        newPartNodeNumMap.push_back({part.id, part.nodeIds.size()});
+        newPartIds.push_back(part.id);
         emit partAdded(part.id);
     }
     for (auto edgeIdIt = node->edgeIds.begin(); edgeIdIt != node->edgeIds.end(); edgeIdIt++) {
@@ -253,15 +332,54 @@ void Document::removeNode(QUuid nodeId)
     emit nodeRemoved(nodeId);
     removePart(oldPartId);
     
+    if (!newPartNodeNumMap.empty()) {
+        std::sort(newPartNodeNumMap.begin(), newPartNodeNumMap.end(), [&](
+                const std::pair<QUuid, size_t> &first, const std::pair<QUuid, size_t> &second) {
+            return first.second > second.second;
+        });
+        updateLinkedPart(oldPartId, newPartNodeNumMap[0].first);
+    }
+    
+    for (const auto &partId: newPartIds) {
+        checkPartGrid(partId);
+    }
+    
     emit skeletonChanged();
 }
 
 void Document::addNode(float x, float y, float z, float radius, QUuid fromNodeId)
 {
-    createNode(x, y, z, radius, fromNodeId);
+    createNode(QUuid::createUuid(), x, y, z, radius, fromNodeId);
 }
 
-QUuid Document::createNode(float x, float y, float z, float radius, QUuid fromNodeId)
+void Document::addPartByPolygons(const QPolygonF &mainProfile, const QPolygonF &sideProfile, const QSizeF &canvasSize)
+{
+    if (mainProfile.empty() || sideProfile.empty())
+        return;
+    
+    QThread *thread = new QThread;
+    ContourToPartConverter *contourToPartConverter = new ContourToPartConverter(mainProfile, sideProfile, canvasSize);
+    contourToPartConverter->moveToThread(thread);
+    connect(thread, &QThread::started, contourToPartConverter, &ContourToPartConverter::process);
+    connect(contourToPartConverter, &ContourToPartConverter::finished, this, [=]() {
+        const auto &snapshot = contourToPartConverter->getSnapshot();
+        if (!snapshot.nodes.empty()) {
+            addFromSnapshot(snapshot, SnapshotSource::Paste);
+            saveSnapshot();
+        }
+        delete contourToPartConverter;
+    });
+    connect(contourToPartConverter, &ContourToPartConverter::finished, thread, &QThread::quit);
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+    thread->start();
+}
+
+void Document::addNodeWithId(QUuid nodeId, float x, float y, float z, float radius, QUuid fromNodeId)
+{
+    createNode(nodeId, x, y, z, radius, fromNodeId);
+}
+
+QUuid Document::createNode(QUuid nodeId, float x, float y, float z, float radius, QUuid fromNodeId)
 {
     QUuid partId;
     const SkeletonNode *fromNode = nullptr;
@@ -286,12 +404,12 @@ QUuid Document::createNode(float x, float y, float z, float radius, QUuid fromNo
         if (part != partMap.end())
             part->second.dirty = true;
     }
-    SkeletonNode node;
+    SkeletonNode node(nodeId);
     node.partId = partId;
     node.setRadius(radius);
-    node.x = x;
-    node.y = y;
-    node.z = z;
+    node.setX(x);
+    node.setY(y);
+    node.setZ(z);
     nodeMap[node.id] = node;
     partMap[partId].nodeIds.push_back(node.id);
     
@@ -313,12 +431,13 @@ QUuid Document::createNode(float x, float y, float z, float radius, QUuid fromNo
     if (newPartAdded)
         addPartToComponent(partId, m_currentCanvasComponentId);
     
+    checkPartGrid(partId);
     emit skeletonChanged();
     
     return node.id;
 }
 
-void Document::addPose(QUuid poseId, QString name, std::vector<std::pair<std::map<QString, QString>, std::map<QString, std::map<QString, QString>>>> frames, QUuid turnaroundImageId)
+void Document::addPose(QUuid poseId, QString name, std::vector<std::pair<std::map<QString, QString>, std::map<QString, std::map<QString, QString>>>> frames, QUuid turnaroundImageId, float yTranslationScale)
 {
     QUuid newPoseId = poseId;
     auto &pose = poseMap[newPoseId];
@@ -327,6 +446,7 @@ void Document::addPose(QUuid poseId, QString name, std::vector<std::pair<std::ma
     pose.name = name;
     pose.frames = frames;
     pose.turnaroundImageId = turnaroundImageId;
+    pose.yTranslationScale = yTranslationScale;
     pose.dirty = true;
     
     poseIdList.push_back(newPoseId);
@@ -396,6 +516,7 @@ void Document::renameMotion(QUuid motionId, QString name)
     
     findMotionResult->second.name = name;
     emit motionNameChanged(motionId);
+    emit motionListChanged();
     emit optionsChanged();
 }
 
@@ -423,9 +544,22 @@ void Document::setPoseFrames(QUuid poseId, std::vector<std::pair<std::map<QStrin
     }
     findPoseResult->second.frames = frames;
     findPoseResult->second.dirty = true;
+    bool foundMotion = false;
+    for (auto &it: motionMap) {
+        for (const auto &clip: it.second.clips) {
+            if (poseId == clip.linkToId) {
+                it.second.dirty = true;
+                foundMotion = true;
+                break;
+            }
+        }
+    }
     emit posesChanged();
     emit poseFramesChanged(poseId);
     emit optionsChanged();
+    if (foundMotion) {
+        emit motionsChanged();
+    }
 }
 
 void Document::setPoseTurnaroundImageId(QUuid poseId, QUuid imageId)
@@ -443,6 +577,19 @@ void Document::setPoseTurnaroundImageId(QUuid poseId, QUuid imageId)
     emit optionsChanged();
 }
 
+void Document::setPoseYtranslationScale(QUuid poseId, float scale)
+{
+    auto findPoseResult = poseMap.find(poseId);
+    if (findPoseResult == poseMap.end()) {
+        qDebug() << "Find pose failed:" << poseId;
+        return;
+    }
+    findPoseResult->second.yTranslationScale = scale;
+    findPoseResult->second.dirty = true;
+    emit poseYtranslationScaleChanged(poseId);
+    emit optionsChanged();
+}
+
 void Document::renamePose(QUuid poseId, QString name)
 {
     auto findPoseResult = poseMap.find(poseId);
@@ -455,12 +602,13 @@ void Document::renamePose(QUuid poseId, QString name)
     
     findPoseResult->second.name = name;
     emit poseNameChanged(poseId);
+    emit poseListChanged();
     emit optionsChanged();
 }
 
 bool Document::originSettled() const
 {
-    return !qFuzzyIsNull(originX) && !qFuzzyIsNull(originY) && !qFuzzyIsNull(originZ);
+    return !qFuzzyIsNull(getOriginX()) && !qFuzzyIsNull(getOriginY()) && !qFuzzyIsNull(getOriginZ());
 }
 
 void Document::addEdge(QUuid fromNodeId, QUuid toNodeId)
@@ -538,10 +686,61 @@ void Document::addEdge(QUuid fromNodeId, QUuid toNodeId)
     emit edgeAdded(edge.id);
     
     if (toPartRemoved) {
+        updateLinkedPart(toPartId, fromNode->partId);
         removePart(toPartId);
     }
     
+    checkPartGrid(fromNode->partId);
+    
     emit skeletonChanged();
+}
+
+void Document::checkPartGrid(QUuid partId)
+{
+    return;
+    /*
+    SkeletonPart *part = (SkeletonPart *)findPart(partId);
+    if (nullptr == part)
+        return;
+    bool isGrid = false;
+    for (const auto &nodeId: part->nodeIds) {
+        const SkeletonNode *node = findNode(nodeId);
+        if (nullptr == node)
+            continue;
+        if (node->edgeIds.size() >= 3) {
+            isGrid = true;
+            break;
+        }
+    }
+    if (part->gridded == isGrid)
+        return;
+    part->gridded = isGrid;
+    part->dirty = true;
+    emit partGridStateChanged(partId);
+    */
+}
+
+void Document::updateLinkedPart(QUuid oldPartId, QUuid newPartId)
+{
+    for (auto &partIt: partMap) {
+        if (partIt.second.cutFaceLinkedId == oldPartId) {
+            partIt.second.dirty = true;
+            partIt.second.setCutFaceLinkedId(newPartId);
+        }
+    }
+    std::set<QUuid> dirtyPartIds;
+    for (auto &nodeIt: nodeMap) {
+        if (nodeIt.second.cutFaceLinkedId == oldPartId) {
+            dirtyPartIds.insert(nodeIt.second.partId);
+            nodeIt.second.setCutFaceLinkedId(newPartId);
+        }
+    }
+    for (const auto &partId: dirtyPartIds) {
+        SkeletonPart *part = (SkeletonPart *)findPart(partId);
+        if (nullptr == part)
+            continue;
+        part->dirty = true;
+    }
 }
 
 const Component *Document::findComponent(QUuid componentId) const
@@ -618,15 +817,15 @@ void Document::moveNodeBy(QUuid nodeId, float x, float y, float z)
         return;
     bool changed = false;
     if (!(m_allPositionRelatedLocksEnabled && xlocked)) {
-        it->second.x += x;
+        it->second.addX(x);
         changed = true;
     }
     if (!(m_allPositionRelatedLocksEnabled && ylocked)) {
-        it->second.y += y;
+        it->second.addY(y);
         changed = true;
     }
     if (!(m_allPositionRelatedLocksEnabled && zlocked)) {
-        it->second.z += z;
+        it->second.addZ(z);
         changed = true;
     }
     if (!changed)
@@ -641,11 +840,11 @@ void Document::moveNodeBy(QUuid nodeId, float x, float y, float z)
 void Document::moveOriginBy(float x, float y, float z)
 {
     if (!(m_allPositionRelatedLocksEnabled && xlocked))
-        originX += x;
+        addOriginX(x);
     if (!(m_allPositionRelatedLocksEnabled && ylocked))
-        originY += y;
+        addOriginY(y);
     if (!(m_allPositionRelatedLocksEnabled && zlocked))
-        originZ += z;
+        addOriginZ(z);
     markAllDirty();
     emit originChanged();
     emit skeletonChanged();
@@ -661,11 +860,11 @@ void Document::setNodeOrigin(QUuid nodeId, float x, float y, float z)
     if ((m_allPositionRelatedLocksEnabled && isPartReadonly(it->second.partId)))
         return;
     if (!(m_allPositionRelatedLocksEnabled && xlocked))
-        it->second.x = x;
+        it->second.setX(x);
     if (!(m_allPositionRelatedLocksEnabled && ylocked))
-        it->second.y = y;
+        it->second.setY(y);
     if (!(m_allPositionRelatedLocksEnabled && zlocked))
-        it->second.z = z;
+        it->second.setZ(z);
     auto part = partMap.find(it->second.partId);
     if (part != partMap.end())
         part->second.dirty = true;
@@ -700,7 +899,12 @@ void Document::switchNodeXZ(QUuid nodeId)
     }
     if (isPartReadonly(it->second.partId))
         return;
-    std::swap(it->second.x, it->second.z);
+    {
+        float oldX = it->second.getX();
+        float oldZ = it->second.getZ();
+        it->second.setX(oldZ);
+        it->second.setZ(oldX);
+    }
     auto part = partMap.find(it->second.partId);
     if (part != partMap.end())
         part->second.dirty = true;
@@ -727,6 +931,75 @@ void Document::setNodeBoneMark(QUuid nodeId, BoneMark mark)
     emit skeletonChanged();
 }
 
+void Document::setNodeCutRotation(QUuid nodeId, float cutRotation)
+{
+    auto node = nodeMap.find(nodeId);
+    if (node == nodeMap.end()) {
+        qDebug() << "Node not found:" << nodeId;
+        return;
+    }
+    if (qFuzzyCompare(cutRotation, node->second.cutRotation))
+        return;
+    node->second.setCutRotation(cutRotation);
+    auto part = partMap.find(node->second.partId);
+    if (part != partMap.end())
+        part->second.dirty = true;
+    emit nodeCutRotationChanged(nodeId);
+    emit skeletonChanged();
+}
+
+void Document::setNodeCutFace(QUuid nodeId, CutFace cutFace)
+{
+    auto node = nodeMap.find(nodeId);
+    if (node == nodeMap.end()) {
+        qDebug() << "Node not found:" << nodeId;
+        return;
+    }
+    if (node->second.cutFace == cutFace)
+        return;
+    node->second.setCutFace(cutFace);
+    auto part = partMap.find(node->second.partId);
+    if (part != partMap.end())
+        part->second.dirty = true;
+    emit nodeCutFaceChanged(nodeId);
+    emit skeletonChanged();
+}
+
+void Document::setNodeCutFaceLinkedId(QUuid nodeId, QUuid linkedId)
+{
+    auto node = nodeMap.find(nodeId);
+    if (node == nodeMap.end()) {
+        qDebug() << "Node not found:" << nodeId;
+        return;
+    }
+    if (node->second.cutFace == CutFace::UserDefined &&
+            node->second.cutFaceLinkedId == linkedId)
+        return;
+    node->second.setCutFaceLinkedId(linkedId);
+    auto part = partMap.find(node->second.partId);
+    if (part != partMap.end())
+        part->second.dirty = true;
+    emit nodeCutFaceChanged(nodeId);
+    emit skeletonChanged();
+}
+
+void Document::clearNodeCutFaceSettings(QUuid nodeId)
+{
+    auto node = nodeMap.find(nodeId);
+    if (node == nodeMap.end()) {
+        qDebug() << "Node not found:" << nodeId;
+        return;
+    }
+    if (!node->second.hasCutFaceSettings)
+        return;
+    node->second.clearCutFaceSettings();
+    auto part = partMap.find(node->second.partId);
+    if (part != partMap.end())
+        part->second.dirty = true;
+    emit nodeCutFaceChanged(nodeId);
+    emit skeletonChanged();
+}
+
 void Document::updateTurnaround(const QImage &image)
 {
     turnaround = image;
@@ -743,7 +1016,20 @@ void Document::setEditMode(SkeletonDocumentEditMode mode)
         return;
     
     editMode = mode;
+    if (editMode != SkeletonDocumentEditMode::Paint)
+        m_paintMode = PaintMode::None;
     emit editModeChanged();
+}
+
+void Document::setPaintMode(PaintMode mode)
+{
+    if (m_paintMode == mode)
+        return;
+    
+    m_paintMode = mode;
+    emit paintModeChanged();
+    
+    doPickMouseTarget();
 }
 
 void Document::joinNodeAndNeiborsToGroup(std::vector<QUuid> *group, QUuid nodeId, std::set<QUuid> *visitMap, QUuid noUseEdgeId)
@@ -775,6 +1061,7 @@ void Document::splitPartByNode(std::vector<std::vector<QUuid>> *groups, QUuid no
 {
     const SkeletonNode *node = findNode(nodeId);
     std::set<QUuid> visitMap;
+    visitMap.insert(nodeId);
     for (auto edgeIt = node->edgeIds.begin(); edgeIt != node->edgeIds.end(); edgeIt++) {
         std::vector<QUuid> group;
         const SkeletonEdge *edge = findEdge(*edgeIt);
@@ -857,23 +1144,50 @@ void Document::toSnapshot(Snapshot *snapshot, const std::set<QUuid> &limitNodeId
             part["subdived"] = partIt.second.subdived ? "true" : "false";
             part["disabled"] = partIt.second.disabled ? "true" : "false";
             part["xMirrored"] = partIt.second.xMirrored ? "true" : "false";
-            part["zMirrored"] = partIt.second.zMirrored ? "true" : "false";
+            if (partIt.second.zMirrored)
+                part["zMirrored"] = partIt.second.zMirrored ? "true" : "false";
+            if (partIt.second.base != PartBase::XYZ)
+                part["base"] = PartBaseToString(partIt.second.base);
             part["rounded"] = partIt.second.rounded ? "true" : "false";
+            part["chamfered"] = partIt.second.chamfered ? "true" : "false";
+            if (PartTarget::Model != partIt.second.target)
+                part["target"] = PartTargetToString(partIt.second.target);
             if (partIt.second.cutRotationAdjusted())
                 part["cutRotation"] = QString::number(partIt.second.cutRotation);
-            if (partIt.second.cutTemplateAdjusted())
-                part["cutTemplate"] = cutTemplatePointsToString(partIt.second.cutTemplate);
+            if (partIt.second.cutFaceAdjusted()) {
+                if (CutFace::UserDefined == partIt.second.cutFace) {
+                    if (!partIt.second.cutFaceLinkedId.isNull()) {
+                        part["cutFace"] = partIt.second.cutFaceLinkedId.toString();
+                    }
+                } else {
+                    part["cutFace"] = CutFaceToString(partIt.second.cutFace);
+                }
+            }
+            if (!partIt.second.fillMeshLinkedId.isNull())
+                part["fillMesh"] = partIt.second.fillMeshLinkedId.toString();
             part["dirty"] = partIt.second.dirty ? "true" : "false";
             if (partIt.second.hasColor)
-                part["color"] = partIt.second.color.name();
+                part["color"] = partIt.second.color.name(QColor::HexArgb);
+            if (partIt.second.colorSolubilityAdjusted())
+                part["colorSolubility"] = QString::number(partIt.second.colorSolubility);
             if (partIt.second.deformThicknessAdjusted())
                 part["deformThickness"] = QString::number(partIt.second.deformThickness);
             if (partIt.second.deformWidthAdjusted())
                 part["deformWidth"] = QString::number(partIt.second.deformWidth);
+            if (!partIt.second.deformMapImageId.isNull())
+                part["deformMapImageId"] = partIt.second.deformMapImageId.toString();
+            if (partIt.second.deformMapScaleAdjusted())
+                part["deformMapScale"] = QString::number(partIt.second.deformMapScale);
+            if (partIt.second.hollowThicknessAdjusted())
+                part["hollowThickness"] = QString::number(partIt.second.hollowThickness);
             if (!partIt.second.name.isEmpty())
                 part["name"] = partIt.second.name;
             if (partIt.second.materialAdjusted())
                 part["materialId"] = partIt.second.materialId.toString();
+            if (partIt.second.countershaded)
+                part["countershaded"] = "true";
+            //if (partIt.second.gridded)
+            //    part["gridded"] = "true";
             snapshot->parts[part["id"]] = part;
         }
         for (const auto &nodeIt: nodeMap) {
@@ -882,12 +1196,22 @@ void Document::toSnapshot(Snapshot *snapshot, const std::set<QUuid> &limitNodeId
             std::map<QString, QString> node;
             node["id"] = nodeIt.second.id.toString();
             node["radius"] = QString::number(nodeIt.second.radius);
-            node["x"] = QString::number(nodeIt.second.x);
-            node["y"] = QString::number(nodeIt.second.y);
-            node["z"] = QString::number(nodeIt.second.z);
+            node["x"] = QString::number(nodeIt.second.getX());
+            node["y"] = QString::number(nodeIt.second.getY());
+            node["z"] = QString::number(nodeIt.second.getZ());
             node["partId"] = nodeIt.second.partId.toString();
             if (nodeIt.second.boneMark != BoneMark::None)
                 node["boneMark"] = BoneMarkToString(nodeIt.second.boneMark);
+            if (nodeIt.second.hasCutFaceSettings) {
+                node["cutRotation"] = QString::number(nodeIt.second.cutRotation);
+                if (CutFace::UserDefined == nodeIt.second.cutFace) {
+                    if (!nodeIt.second.cutFaceLinkedId.isNull()) {
+                        node["cutFace"] = nodeIt.second.cutFaceLinkedId.toString();
+                    }
+                } else {
+                    node["cutFace"] = CutFaceToString(nodeIt.second.cutFace);
+                }
+            }
             if (!nodeIt.second.name.isEmpty())
                 node["name"] = nodeIt.second.name;
             snapshot->nodes[node["id"]] = node;
@@ -922,6 +1246,18 @@ void Document::toSnapshot(Snapshot *snapshot, const std::set<QUuid> &limitNodeId
                 component["smoothAll"] = QString::number(componentIt.second.smoothAll);
             if (componentIt.second.smoothSeamAdjusted())
                 component["smoothSeam"] = QString::number(componentIt.second.smoothSeam);
+            if (componentIt.second.polyCount != PolyCount::Original)
+                component["polyCount"] = PolyCountToString(componentIt.second.polyCount);
+            if (componentIt.second.layer != ComponentLayer::Body)
+                component["layer"] = ComponentLayerToString(componentIt.second.layer);
+            if (componentIt.second.clothStiffnessAdjusted())
+                component["clothStiffness"] = QString::number(componentIt.second.clothStiffness);
+            if (componentIt.second.clothIterationAdjusted())
+                component["clothIteration"] = QString::number(componentIt.second.clothIteration);
+            if (componentIt.second.clothForceAdjusted())
+                component["clothForce"] = ClothForceToString(componentIt.second.clothForce);
+            if (componentIt.second.clothOffsetAdjusted())
+                component["clothOffset"] = QString::number(componentIt.second.clothOffset);
             QStringList childIdList;
             for (const auto &childId: componentIt.second.childrenIds) {
                 childIdList.append(childId.toString());
@@ -975,6 +1311,8 @@ void Document::toSnapshot(Snapshot *snapshot, const std::set<QUuid> &limitNodeId
                     maps.push_back(textureMap);
                 }
                 std::map<QString, QString> layerAttributes;
+                if (!qFuzzyCompare((float)layer.tileScale, (float)1.0))
+                    layerAttributes["tileScale"] = QString::number(layer.tileScale);
                 layers.push_back({layerAttributes, maps});
             }
             snapshot->materials.push_back(std::make_pair(material, layers));
@@ -997,6 +1335,8 @@ void Document::toSnapshot(Snapshot *snapshot, const std::set<QUuid> &limitNodeId
                 pose["name"] = poseIt.second.name;
             if (!poseIt.second.turnaroundImageId.isNull())
                 pose["canvasImageId"] = poseIt.second.turnaroundImageId.toString();
+            if (poseIt.second.yTranslationScaleAdjusted())
+                pose["yTranslationScale"] = QString::number(poseIt.second.yTranslationScale);
             snapshot->poses.push_back(std::make_pair(pose, poseIt.second.frames));
         }
     }
@@ -1028,28 +1368,117 @@ void Document::toSnapshot(Snapshot *snapshot, const std::set<QUuid> &limitNodeId
     }
     if (DocumentToSnapshotFor::Document == forWhat) {
         std::map<QString, QString> canvas;
-        canvas["originX"] = QString::number(originX);
-        canvas["originY"] = QString::number(originY);
-        canvas["originZ"] = QString::number(originZ);
+        canvas["originX"] = QString::number(getOriginX());
+        canvas["originY"] = QString::number(getOriginY());
+        canvas["originZ"] = QString::number(getOriginZ());
         canvas["rigType"] = RigTypeToString(rigType);
+        if (this->polyCount != PolyCount::Original)
+            canvas["polyCount"] = PolyCountToString(this->polyCount);
         snapshot->canvas = canvas;
     }
 }
 
-void Document::addFromSnapshot(const Snapshot &snapshot, bool fromPaste)
+void Document::createSinglePartFromEdges(const std::vector<QVector3D> &nodes,
+        const std::vector<std::pair<size_t, size_t>> &edges)
+{
+    std::vector<QUuid> newAddedNodeIds;
+    std::vector<QUuid> newAddedEdgeIds;
+    std::vector<QUuid> newAddedPartIds;
+    std::map<size_t, QUuid> nodeIndexToIdMap;
+    
+    QUuid partId = QUuid::createUuid();
+    
+    Component component(QUuid(), partId.toString(), "partId");
+    component.combineMode = CombineMode::Normal;
+    componentMap[component.id] = component;
+    rootComponent.addChild(component.id);
+    
+    auto &newPart = partMap[partId];
+    newPart.id = partId;
+    newPart.componentId = component.id;
+    newAddedPartIds.push_back(newPart.id);
+    
+    auto nodeToId = [&](size_t nodeIndex) {
+        auto findId = nodeIndexToIdMap.find(nodeIndex);
+        if (findId != nodeIndexToIdMap.end())
+            return findId->second;
+        const auto &position = nodes[nodeIndex];
+        SkeletonNode newNode;
+        newNode.partId = newPart.id;
+        newNode.setX(getOriginX() + position.x());
+        newNode.setY(getOriginY() - position.y());
+        newNode.setZ(getOriginZ() - position.z());
+        newNode.setRadius(0);
+        nodeMap[newNode.id] = newNode;
+        newPart.nodeIds.push_back(newNode.id);
+        newAddedNodeIds.push_back(newNode.id);
+        nodeIndexToIdMap.insert({nodeIndex, newNode.id});
+        return newNode.id;
+    };
+    
+    for (const auto &edge: edges) {
+        QUuid firstNodeId = nodeToId(edge.first);
+        QUuid secondNodeId = nodeToId(edge.second);
+        
+        SkeletonEdge newEdge;
+        newEdge.nodeIds.push_back(firstNodeId);
+        newEdge.nodeIds.push_back(secondNodeId);
+        newEdge.partId = newPart.id;
+        
+        nodeMap[firstNodeId].edgeIds.push_back(newEdge.id);
+        nodeMap[secondNodeId].edgeIds.push_back(newEdge.id);
+        
+        newAddedEdgeIds.push_back(newEdge.id);
+        
+        edgeMap[newEdge.id] = newEdge;
+    }
+    
+    for (const auto &nodeIt: newAddedNodeIds) {
+        qDebug() << "new node:" << nodeIt;
+        emit nodeAdded(nodeIt);
+    }
+    for (const auto &edgeIt: newAddedEdgeIds) {
+        qDebug() << "new edge:" << edgeIt;
+        emit edgeAdded(edgeIt);
+    }
+    for (const auto &partIt: newAddedPartIds) {
+        qDebug() << "new part:" << partIt;
+        emit partAdded(partIt);
+    }
+    
+    for (const auto &partIt : newAddedPartIds) {
+        checkPartGrid(partIt);
+        emit partVisibleStateChanged(partIt);
+    }
+    
+    emit uncheckAll();
+    for (const auto &nodeIt: newAddedNodeIds) {
+        emit checkNode(nodeIt);
+    }
+    for (const auto &edgeIt: newAddedEdgeIds) {
+        emit checkEdge(edgeIt);
+    }
+    
+    emit componentChildrenChanged(QUuid());
+    emit skeletonChanged();
+}
+
+void Document::addFromSnapshot(const Snapshot &snapshot, enum SnapshotSource source)
 {
     bool isOriginChanged = false;
     bool isRigTypeChanged = false;
-    if (!fromPaste) {
+    if (SnapshotSource::Paste != source &&
+            SnapshotSource::Import != source) {
+        this->polyCount = PolyCountFromString(valueOfKeyInMapOrEmpty(snapshot.canvas, "polyCount").toUtf8().constData());
         const auto &originXit = snapshot.canvas.find("originX");
         const auto &originYit = snapshot.canvas.find("originY");
         const auto &originZit = snapshot.canvas.find("originZ");
         if (originXit != snapshot.canvas.end() &&
                 originYit != snapshot.canvas.end() &&
                 originZit != snapshot.canvas.end()) {
-            originX = originXit->second.toFloat();
-            originY = originYit->second.toFloat();
-            originZ = originZit->second.toFloat();
+            setOriginX(originXit->second.toFloat());
+            setOriginY(originYit->second.toFloat());
+            setOriginZ(originZit->second.toFloat());
             isOriginChanged = true;
         }
         const auto &rigTypeIt = snapshot.canvas.find("rigType");
@@ -1074,55 +1503,83 @@ void Document::addFromSnapshot(const Snapshot &snapshot, bool fromPaste)
             qDebug() << "Unsupported material type:" << materialType;
             continue;
         }
-        QUuid newMaterialId = QUuid::createUuid();
-        auto &newMaterial = materialMap[newMaterialId];
-        newMaterial.id = newMaterialId;
-        newMaterial.name = valueOfKeyInMapOrEmpty(materialAttributes, "name");
-        oldNewIdMap[QUuid(valueOfKeyInMapOrEmpty(materialAttributes, "id"))] = newMaterialId;
-        for (const auto &layerIt: materialIt.second) {
-            MaterialLayer layer;
-            for (const auto &mapItem: layerIt.second) {
-                auto textureTypeString = valueOfKeyInMapOrEmpty(mapItem, "for");
-                auto textureType = TextureTypeFromString(textureTypeString.toUtf8().constData());
-                if (TextureType::None == textureType) {
-                    qDebug() << "Unsupported texture type:" << textureTypeString;
-                    continue;
+        QUuid oldMaterialId = QUuid(valueOfKeyInMapOrEmpty(materialAttributes, "id"));
+        QUuid newMaterialId = SnapshotSource::Import == source ? oldMaterialId : QUuid::createUuid();
+        oldNewIdMap[oldMaterialId] = newMaterialId;
+        if (materialMap.end() == materialMap.find(newMaterialId)) {
+            auto &newMaterial = materialMap[newMaterialId];
+            newMaterial.id = newMaterialId;
+            newMaterial.name = valueOfKeyInMapOrEmpty(materialAttributes, "name");
+            for (const auto &layerIt: materialIt.second) {
+                MaterialLayer layer;
+                auto findTileScale = layerIt.first.find("tileScale");
+                if (findTileScale != layerIt.first.end())
+                    layer.tileScale = findTileScale->second.toFloat();
+                for (const auto &mapItem: layerIt.second) {
+                    auto textureTypeString = valueOfKeyInMapOrEmpty(mapItem, "for");
+                    auto textureType = TextureTypeFromString(textureTypeString.toUtf8().constData());
+                    if (TextureType::None == textureType) {
+                        qDebug() << "Unsupported texture type:" << textureTypeString;
+                        continue;
+                    }
+                    auto linkTypeString = valueOfKeyInMapOrEmpty(mapItem, "linkDataType");
+                    if ("imageId" != linkTypeString) {
+                        qDebug() << "Unsupported link data type:" << linkTypeString;
+                        continue;
+                    }
+                    auto imageId = QUuid(valueOfKeyInMapOrEmpty(mapItem, "linkData"));
+                    MaterialMap materialMap;
+                    materialMap.imageId = imageId;
+                    materialMap.forWhat = textureType;
+                    layer.maps.push_back(materialMap);
                 }
-                auto linkTypeString = valueOfKeyInMapOrEmpty(mapItem, "linkDataType");
-                if ("imageId" != linkTypeString) {
-                    qDebug() << "Unsupported link data type:" << linkTypeString;
-                    continue;
-                }
-                auto imageId = QUuid(valueOfKeyInMapOrEmpty(mapItem, "linkData"));
-                MaterialMap materialMap;
-                materialMap.imageId = imageId;
-                materialMap.forWhat = textureType;
-                layer.maps.push_back(materialMap);
+                newMaterial.layers.push_back(layer);
             }
-            newMaterial.layers.push_back(layer);
+            materialIdList.push_back(newMaterialId);
+            emit materialAdded(newMaterialId);
         }
-        materialIdList.push_back(newMaterialId);
-        emit materialAdded(newMaterialId);
     }
+    std::map<QUuid, QUuid> cutFaceLinkedIdModifyMap;
     for (const auto &partKv: snapshot.parts) {
         const auto newUuid = QUuid::createUuid();
         SkeletonPart &part = partMap[newUuid];
         part.id = newUuid;
         oldNewIdMap[QUuid(partKv.first)] = part.id;
         part.name = valueOfKeyInMapOrEmpty(partKv.second, "name");
-        part.visible = isTrueValueString(valueOfKeyInMapOrEmpty(partKv.second, "visible"));
+        const auto &visibleIt = partKv.second.find("visible");
+        if (visibleIt != partKv.second.end()) {
+            part.visible = isTrueValueString(visibleIt->second);
+        } else {
+            part.visible = true;
+        }
         part.locked = isTrueValueString(valueOfKeyInMapOrEmpty(partKv.second, "locked"));
         part.subdived = isTrueValueString(valueOfKeyInMapOrEmpty(partKv.second, "subdived"));
         part.disabled = isTrueValueString(valueOfKeyInMapOrEmpty(partKv.second, "disabled"));
         part.xMirrored = isTrueValueString(valueOfKeyInMapOrEmpty(partKv.second, "xMirrored"));
         part.zMirrored = isTrueValueString(valueOfKeyInMapOrEmpty(partKv.second, "zMirrored"));
+        part.base = PartBaseFromString(valueOfKeyInMapOrEmpty(partKv.second, "base").toUtf8().constData());
         part.rounded = isTrueValueString(valueOfKeyInMapOrEmpty(partKv.second, "rounded"));
+        part.chamfered = isTrueValueString(valueOfKeyInMapOrEmpty(partKv.second, "chamfered"));
+        part.target = PartTargetFromString(valueOfKeyInMapOrEmpty(partKv.second, "target").toUtf8().constData());
         const auto &cutRotationIt = partKv.second.find("cutRotation");
         if (cutRotationIt != partKv.second.end())
             part.setCutRotation(cutRotationIt->second.toFloat());
-        const auto &cutTemplateIt = partKv.second.find("cutTemplate");
-        if (cutTemplateIt != partKv.second.end())
-            part.setCutTemplate(cutTemplatePointsFromString(cutTemplateIt->second));
+        const auto &cutFaceIt = partKv.second.find("cutFace");
+        if (cutFaceIt != partKv.second.end()) {
+            QUuid cutFaceLinkedId = QUuid(cutFaceIt->second);
+            if (cutFaceLinkedId.isNull()) {
+                part.setCutFace(CutFaceFromString(cutFaceIt->second.toUtf8().constData()));
+            } else {
+                part.setCutFaceLinkedId(cutFaceLinkedId);
+                cutFaceLinkedIdModifyMap.insert({part.id, cutFaceLinkedId});
+            }
+        }
+        const auto &fillMeshIt = partKv.second.find("fillMesh");
+        if (fillMeshIt != partKv.second.end()) {
+            QUuid fillMeshLinkedId = QUuid(fillMeshIt->second);
+            if (!fillMeshLinkedId.isNull())
+                part.fillMeshLinkedId = fillMeshLinkedId;
+        }
         if (isTrueValueString(valueOfKeyInMapOrEmpty(partKv.second, "inverse")))
             inversePartIds.insert(part.id);
         const auto &colorIt = partKv.second.find("color");
@@ -1130,16 +1587,41 @@ void Document::addFromSnapshot(const Snapshot &snapshot, bool fromPaste)
             part.color = QColor(colorIt->second);
             part.hasColor = true;
         }
+        const auto &colorSolubilityIt = partKv.second.find("colorSolubility");
+        if (colorSolubilityIt != partKv.second.end())
+            part.colorSolubility = colorSolubilityIt->second.toFloat();
         const auto &deformThicknessIt = partKv.second.find("deformThickness");
         if (deformThicknessIt != partKv.second.end())
             part.setDeformThickness(deformThicknessIt->second.toFloat());
         const auto &deformWidthIt = partKv.second.find("deformWidth");
         if (deformWidthIt != partKv.second.end())
             part.setDeformWidth(deformWidthIt->second.toFloat());
+        const auto &deformMapImageIdIt = partKv.second.find("deformMapImageId");
+        if (deformMapImageIdIt != partKv.second.end())
+            part.deformMapImageId = QUuid(deformMapImageIdIt->second);
+        const auto &deformMapScaleIt = partKv.second.find("deformMapScale");
+        if (deformMapScaleIt != partKv.second.end())
+            part.deformMapScale = deformMapScaleIt->second.toFloat();
+        const auto &hollowThicknessIt = partKv.second.find("hollowThickness");
+        if (hollowThicknessIt != partKv.second.end())
+            part.hollowThickness = hollowThicknessIt->second.toFloat();
         const auto &materialIdIt = partKv.second.find("materialId");
         if (materialIdIt != partKv.second.end())
             part.materialId = oldNewIdMap[QUuid(materialIdIt->second)];
+        part.countershaded = isTrueValueString(valueOfKeyInMapOrEmpty(partKv.second, "countershaded"));
+        //part.gridded = isTrueValueString(valueOfKeyInMapOrEmpty(partKv.second, "gridded"));;
         newAddedPartIds.insert(part.id);
+    }
+    for (const auto &it: cutFaceLinkedIdModifyMap) {
+        SkeletonPart &part = partMap[it.first];
+        auto findNewLinkedId = oldNewIdMap.find(it.second);
+        if (findNewLinkedId == oldNewIdMap.end()) {
+            if (partMap.find(it.second) == partMap.end()) {
+                part.setCutFaceLinkedId(QUuid());
+            }
+        } else {
+            part.setCutFaceLinkedId(findNewLinkedId->second);
+        }
     }
     for (const auto &nodeKv: snapshot.nodes) {
         if (nodeKv.second.find("radius") == nodeKv.second.end() ||
@@ -1148,15 +1630,36 @@ void Document::addFromSnapshot(const Snapshot &snapshot, bool fromPaste)
                 nodeKv.second.find("z") == nodeKv.second.end() ||
                 nodeKv.second.find("partId") == nodeKv.second.end())
             continue;
-        SkeletonNode node;
-        oldNewIdMap[QUuid(nodeKv.first)] = node.id;
+        QUuid oldNodeId = QUuid(nodeKv.first);
+        SkeletonNode node(nodeMap.find(oldNodeId) == nodeMap.end() ? oldNodeId : QUuid::createUuid());
+        oldNewIdMap[oldNodeId] = node.id;
         node.name = valueOfKeyInMapOrEmpty(nodeKv.second, "name");
         node.radius = valueOfKeyInMapOrEmpty(nodeKv.second, "radius").toFloat();
-        node.x = valueOfKeyInMapOrEmpty(nodeKv.second, "x").toFloat();
-        node.y = valueOfKeyInMapOrEmpty(nodeKv.second, "y").toFloat();
-        node.z = valueOfKeyInMapOrEmpty(nodeKv.second, "z").toFloat();
+        node.setX(valueOfKeyInMapOrEmpty(nodeKv.second, "x").toFloat());
+        node.setY(valueOfKeyInMapOrEmpty(nodeKv.second, "y").toFloat());
+        node.setZ(valueOfKeyInMapOrEmpty(nodeKv.second, "z").toFloat());
         node.partId = oldNewIdMap[QUuid(valueOfKeyInMapOrEmpty(nodeKv.second, "partId"))];
         node.boneMark = BoneMarkFromString(valueOfKeyInMapOrEmpty(nodeKv.second, "boneMark").toUtf8().constData());
+        const auto &cutRotationIt = nodeKv.second.find("cutRotation");
+        if (cutRotationIt != nodeKv.second.end())
+            node.setCutRotation(cutRotationIt->second.toFloat());
+        const auto &cutFaceIt = nodeKv.second.find("cutFace");
+        if (cutFaceIt != nodeKv.second.end()) {
+            QUuid cutFaceLinkedId = QUuid(cutFaceIt->second);
+            if (cutFaceLinkedId.isNull()) {
+                node.setCutFace(CutFaceFromString(cutFaceIt->second.toUtf8().constData()));
+            } else {
+                node.setCutFaceLinkedId(cutFaceLinkedId);
+                auto findNewLinkedId = oldNewIdMap.find(cutFaceLinkedId);
+                if (findNewLinkedId == oldNewIdMap.end()) {
+                    if (partMap.find(cutFaceLinkedId) == partMap.end()) {
+                        node.setCutFaceLinkedId(QUuid());
+                    }
+                } else {
+                    node.setCutFaceLinkedId(findNewLinkedId->second);
+                }
+            }
+        }
         nodeMap[node.id] = node;
         newAddedNodeIds.insert(node.id);
     }
@@ -1165,8 +1668,9 @@ void Document::addFromSnapshot(const Snapshot &snapshot, bool fromPaste)
                 edgeKv.second.find("to") == edgeKv.second.end() ||
                 edgeKv.second.find("partId") == edgeKv.second.end())
             continue;
-        SkeletonEdge edge;
-        oldNewIdMap[QUuid(edgeKv.first)] = edge.id;
+        QUuid oldEdgeId = QUuid(edgeKv.first);
+        SkeletonEdge edge(edgeMap.find(oldEdgeId) == edgeMap.end() ? oldEdgeId : QUuid::createUuid());
+        oldNewIdMap[oldEdgeId] = edge.id;
         edge.name = valueOfKeyInMapOrEmpty(edgeKv.second, "name");
         edge.partId = oldNewIdMap[QUuid(valueOfKeyInMapOrEmpty(edgeKv.second, "partId"))];
         QString fromNodeId = valueOfKeyInMapOrEmpty(edgeKv.second, "from");
@@ -1207,6 +1711,20 @@ void Document::addFromSnapshot(const Snapshot &snapshot, bool fromPaste)
         const auto &smoothSeamIt = componentKv.second.find("smoothSeam");
         if (smoothSeamIt != componentKv.second.end())
             component.setSmoothSeam(smoothSeamIt->second.toFloat());
+        component.polyCount = PolyCountFromString(valueOfKeyInMapOrEmpty(componentKv.second, "polyCount").toUtf8().constData());
+        component.layer = ComponentLayerFromString(valueOfKeyInMapOrEmpty(componentKv.second, "layer").toUtf8().constData());
+        auto findClothStiffness = componentKv.second.find("clothStiffness");
+        if (findClothStiffness != componentKv.second.end())
+            component.clothStiffness = findClothStiffness->second.toFloat();
+        auto findClothIteration = componentKv.second.find("clothIteration");
+        if (findClothIteration != componentKv.second.end())
+            component.clothIteration = findClothIteration->second.toUInt();
+        auto findClothForce = componentKv.second.find("clothForce");
+        if (findClothForce != componentKv.second.end())
+            component.clothForce = ClothForceFromString(valueOfKeyInMapOrEmpty(componentKv.second, "clothForce").toUtf8().constData());
+        auto findClothOffset = componentKv.second.find("clothOffset");
+        if (findClothOffset != componentKv.second.end())
+            component.clothOffset = valueOfKeyInMapOrEmpty(componentKv.second, "clothOffset").toFloat();
         //qDebug() << "Add component:" << component.id << " old:" << componentKv.first << "name:" << component.name;
         if ("partId" == linkDataType) {
             QUuid partId = oldNewIdMap[QUuid(linkData)];
@@ -1255,6 +1773,9 @@ void Document::addFromSnapshot(const Snapshot &snapshot, bool fromPaste)
         auto findCanvasImageId = poseAttributes.find("canvasImageId");
         if (findCanvasImageId != poseAttributes.end())
             newPose.turnaroundImageId = QUuid(findCanvasImageId->second);
+        auto findYtranslationScale = poseAttributes.find("yTranslationScale");
+        if (findYtranslationScale != poseAttributes.end())
+            newPose.yTranslationScale = findYtranslationScale->second.toFloat();
         newPose.frames = poseIt.second;
         oldNewIdMap[QUuid(valueOfKeyInMapOrEmpty(poseAttributes, "id"))] = newPoseId;
         poseIdList.push_back(newPoseId);
@@ -1303,6 +1824,7 @@ void Document::addFromSnapshot(const Snapshot &snapshot, bool fromPaste)
     emit skeletonChanged();
     
     for (const auto &partIt : newAddedPartIds) {
+        checkPartGrid(partIt);
         emit partVisibleStateChanged(partIt);
     }
     
@@ -1324,9 +1846,9 @@ void Document::addFromSnapshot(const Snapshot &snapshot, bool fromPaste)
 
 void Document::silentReset()
 {
-    originX = 0.0;
-    originY = 0.0;
-    originZ = 0.0;
+    setOriginX(0.0);
+    setOriginY(0.0);
+    setOriginZ(0.0);
     rigType = RigType::None;
     nodeMap.clear();
     edgeMap.clear();
@@ -1342,6 +1864,15 @@ void Document::silentReset()
     removeRigResults();
 }
 
+void Document::silentResetScript()
+{
+    m_script.clear();
+    m_mergedVariables.clear();
+    m_cachedVariables.clear();
+    m_scriptError.clear();
+    m_scriptConsoleLog.clear();
+}
+
 void Document::reset()
 {
     silentReset();
@@ -1349,18 +1880,28 @@ void Document::reset()
     emit skeletonChanged();
 }
 
+void Document::resetScript()
+{
+    silentResetScript();
+    emit cleanupScript();
+    emit scriptChanged();
+    emit scriptErrorChanged();
+    emit scriptConsoleLogChanged();
+    emit mergedVaraiblesChanged();
+}
+
 void Document::fromSnapshot(const Snapshot &snapshot)
 {
     reset();
-    addFromSnapshot(snapshot, false);
+    addFromSnapshot(snapshot, SnapshotSource::Unknown);
     emit uncheckAll();
 }
 
-MeshLoader *Document::takeResultMesh()
+Model *Document::takeResultMesh()
 {
     if (nullptr == m_resultMesh)
         return nullptr;
-    MeshLoader *resultMesh = new MeshLoader(*m_resultMesh);
+    Model *resultMesh = new Model(*m_resultMesh);
     return resultMesh;
 }
 
@@ -1369,32 +1910,32 @@ bool Document::isMeshGenerationSucceed()
     return m_isMeshGenerationSucceed;
 }
 
-MeshLoader *Document::takeResultTextureMesh()
+Model *Document::takeResultTextureMesh()
 {
     if (nullptr == m_resultTextureMesh)
         return nullptr;
-    MeshLoader *resultTextureMesh = new MeshLoader(*m_resultTextureMesh);
+    Model *resultTextureMesh = new Model(*m_resultTextureMesh);
     return resultTextureMesh;
 }
 
-MeshLoader *Document::takeResultRigWeightMesh()
+Model *Document::takeResultRigWeightMesh()
 {
     if (nullptr == m_resultRigWeightMesh)
         return nullptr;
-    MeshLoader *resultMesh = new MeshLoader(*m_resultRigWeightMesh);
+    Model *resultMesh = new Model(*m_resultRigWeightMesh);
     return resultMesh;
 }
 
 void Document::meshReady()
 {
-    MeshLoader *resultMesh = m_meshGenerator->takeResultMesh();
+    Model *resultMesh = m_meshGenerator->takeResultMesh();
     Outcome *outcome = m_meshGenerator->takeOutcome();
-    bool isSucceed = m_meshGenerator->isSucceed();
+    bool isSuccessful = m_meshGenerator->isSuccessful();
     
     for (auto &partId: m_meshGenerator->generatedPreviewPartIds()) {
         auto part = partMap.find(partId);
         if (part != partMap.end()) {
-            MeshLoader *resultPartPreviewMesh = m_meshGenerator->takePartPreviewMesh(partId);
+            Model *resultPartPreviewMesh = m_meshGenerator->takePartPreviewMesh(partId);
             part->second.updatePreviewMesh(resultPartPreviewMesh);
             emit partPreviewChanged(partId);
         }
@@ -1403,7 +1944,15 @@ void Document::meshReady()
     delete m_resultMesh;
     m_resultMesh = resultMesh;
     
-    m_isMeshGenerationSucceed = isSucceed;
+    delete m_resultMeshCutFaceTransforms;
+    m_resultMeshCutFaceTransforms = m_meshGenerator->takeCutFaceTransforms();
+    
+    delete m_resultMeshNodesCutFaces;
+    m_resultMeshNodesCutFaces = m_meshGenerator->takeNodesCutFaces();
+    
+    //addToolToMesh(m_resultMesh);
+    
+    m_isMeshGenerationSucceed = isSuccessful;
     
     delete m_currentOutcome;
     m_currentOutcome = outcome;
@@ -1415,7 +1964,7 @@ void Document::meshReady()
     delete m_meshGenerator;
     m_meshGenerator = nullptr;
     
-    qDebug() << "MeshLoader generation done";
+    qDebug() << "Mesh generation done";
     
     m_isPostProcessResultObsolete = true;
     m_isRigObsolete = true;
@@ -1426,6 +1975,36 @@ void Document::meshReady()
         generateMesh();
     }
 }
+
+//void Document::addToolToMesh(Model *mesh)
+//{
+//    if (nullptr == mesh)
+//        return;
+//
+//    if (nullptr == m_resultMeshCutFaceTransforms ||
+//            nullptr == m_resultMeshNodesCutFaces ||
+//            m_resultMeshCutFaceTransforms->empty() ||
+//            m_resultMeshNodesCutFaces->empty())
+//        return;
+//
+//    ToolMesh toolMesh;
+//    for (const auto &transformIt: *m_resultMeshCutFaceTransforms) {
+//        const auto &nodeId = transformIt.first;
+//        const auto &transform = transformIt.second;
+//        qDebug() << "nodeId:" << nodeId;
+//        for (const auto &cutFaceIt: (*m_resultMeshNodesCutFaces)[nodeId]) {
+//            const auto &cutFaceId = cutFaceIt.first;
+//            const auto &cutFace2d = cutFaceIt.second;
+//            QVector3D position = transform.translation + transform.rotation * (transform.uFactor * cutFace2d.x() + transform.vFactor * cutFace2d.y());
+//            qDebug() << "cutFaceId:" << cutFaceId;
+//            toolMesh.addNode(nodeId.toString() + cutFaceId, position);
+//        }
+//    }
+//    toolMesh.generate();
+//    int shaderVertexCount = 0;
+//    ShaderVertex *shaderVertices = toolMesh.takeShaderVertices(&shaderVertexCount);
+//    mesh->updateTool(shaderVertices, shaderVertexCount);
+//}
 
 bool Document::isPostProcessResultObsolete() const
 {
@@ -1472,7 +2051,9 @@ void Document::generateMesh()
         return;
     }
     
-    qDebug() << "MeshLoader generating..";
+    emit meshGenerating();
+    
+    qDebug() << "Mesh generating..";
     
     settleOrigin();
     
@@ -1484,13 +2065,17 @@ void Document::generateMesh()
     toSnapshot(snapshot);
     resetDirtyFlags();
     m_meshGenerator = new MeshGenerator(snapshot);
+    m_meshGenerator->setId(m_nextMeshGenerationId++);
+    m_meshGenerator->setDefaultPartColor(Preferences::instance().partColor());
     m_meshGenerator->setGeneratedCacheContext(&m_generatedCacheContext);
+    if (!m_smoothNormal) {
+        m_meshGenerator->setSmoothShadingThresholdAngleDegrees(0);
+    }
     m_meshGenerator->moveToThread(thread);
     connect(thread, &QThread::started, m_meshGenerator, &MeshGenerator::process);
     connect(m_meshGenerator, &MeshGenerator::finished, this, &Document::meshReady);
     connect(m_meshGenerator, &MeshGenerator::finished, thread, &QThread::quit);
     connect(thread, &QThread::finished, thread, &QThread::deleteLater);
-    emit meshGenerating();
     thread->start();
 }
 
@@ -1502,6 +2087,7 @@ void Document::generateTexture()
     }
     
     qDebug() << "Texture guide generating..";
+    emit textureGenerating();
     
     m_isTextureObsolete = false;
     
@@ -1515,7 +2101,6 @@ void Document::generateTexture()
     connect(m_textureGenerator, &TextureGenerator::finished, this, &Document::textureReady);
     connect(m_textureGenerator, &TextureGenerator::finished, thread, &QThread::quit);
     connect(thread, &QThread::finished, thread, &QThread::deleteLater);
-    emit textureGenerating();
     thread->start();
 }
 
@@ -1551,6 +2136,10 @@ void Document::textureReady()
     delete m_resultTextureMesh;
     m_resultTextureMesh = m_textureGenerator->takeResultMesh();
     
+    textureHasTransparencySettings = m_textureGenerator->hasTransparencySettings();
+    
+    //addToolToMesh(m_resultTextureMesh);
+    
     m_textureImageUpdateVersion++;
     
     delete m_textureGenerator;
@@ -1577,11 +2166,12 @@ void Document::postProcess()
     m_isPostProcessResultObsolete = false;
 
     if (!m_currentOutcome) {
-        qDebug() << "MeshLoader is null";
+        qDebug() << "Model is null";
         return;
     }
 
     qDebug() << "Post processing..";
+    emit postProcessing();
 
     QThread *thread = new QThread;
     m_postProcessor = new MeshResultPostProcessor(*m_currentOutcome);
@@ -1590,7 +2180,6 @@ void Document::postProcess()
     connect(m_postProcessor, &MeshResultPostProcessor::finished, this, &Document::postProcessedMeshResultReady);
     connect(m_postProcessor, &MeshResultPostProcessor::finished, thread, &QThread::quit);
     connect(thread, &QThread::finished, thread, &QThread::deleteLater);
-    emit postProcessing();
     thread->start();
 }
 
@@ -1609,6 +2198,100 @@ void Document::postProcessedMeshResultReady()
     if (m_isPostProcessResultObsolete) {
         postProcess();
     }
+}
+
+void Document::pickMouseTarget(const QVector3D &nearPosition, const QVector3D &farPosition)
+{
+    m_mouseRayNear = nearPosition;
+    m_mouseRayFar = farPosition;
+    
+    doPickMouseTarget();
+}
+
+void Document::doPickMouseTarget()
+{
+    if (nullptr != m_mousePicker) {
+        m_isMouseTargetResultObsolete = true;
+        return;
+    }
+    
+    m_isMouseTargetResultObsolete = false;
+    
+    if (!m_currentOutcome) {
+        qDebug() << "Model is null";
+        return;
+    }
+    
+    //qDebug() << "Mouse picking..";
+
+    QThread *thread = new QThread;
+    m_mousePicker = new MousePicker(*m_currentOutcome, m_mouseRayNear, m_mouseRayFar);
+    
+    std::map<QUuid, QUuid> paintImages;
+    for (const auto &it: partMap) {
+        if (!it.second.deformMapImageId.isNull()) {
+            paintImages[it.first] = it.second.deformMapImageId;
+        }
+    }
+    if (SkeletonDocumentEditMode::Paint == editMode) {
+        m_mousePicker->setPaintImages(paintImages);
+        m_mousePicker->setPaintMode(m_paintMode);
+        m_mousePicker->setRadius(m_mousePickRadius);
+        m_mousePicker->setMaskNodeIds(m_mousePickMaskNodeIds);
+    }
+    
+    m_mousePicker->moveToThread(thread);
+    connect(thread, &QThread::started, m_mousePicker, &MousePicker::process);
+    connect(m_mousePicker, &MousePicker::finished, this, &Document::mouseTargetReady);
+    connect(m_mousePicker, &MousePicker::finished, thread, &QThread::quit);
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+    thread->start();
+}
+
+void Document::mouseTargetReady()
+{
+    m_mouseTargetPosition = m_mousePicker->targetPosition();
+    const auto &changedPartIds = m_mousePicker->changedPartIds();
+    for (const auto &it: m_mousePicker->resultPaintImages()) {
+        const auto &partId = it.first;
+        if (changedPartIds.find(partId) == changedPartIds.end())
+            continue;
+        const auto &imageId = it.second;
+        m_intermediatePaintImageIds.insert(imageId);
+        setPartDeformMapImageId(partId, imageId);
+    }
+    
+    delete m_mousePicker;
+    m_mousePicker = nullptr;
+    
+    if (!m_isMouseTargetResultObsolete && m_saveNextPaintSnapshot) {
+        m_saveNextPaintSnapshot = false;
+        stopPaint();
+    }
+    
+    emit mouseTargetChanged();
+
+    //qDebug() << "Mouse pick done";
+
+    if (m_isMouseTargetResultObsolete) {
+        pickMouseTarget(m_mouseRayNear, m_mouseRayFar);
+    }
+}
+
+const QVector3D &Document::mouseTargetPosition() const
+{
+    return m_mouseTargetPosition;
+}
+
+float Document::mousePickRadius() const
+{
+    return m_mousePickRadius;
+}
+
+void Document::setMousePickRadius(float radius)
+{
+    m_mousePickRadius = radius;
+    emit mousePickRadiusChanged();
 }
 
 const Outcome &Document::currentPostProcessedOutcome() const
@@ -1827,6 +2510,99 @@ void Document::setComponentExpandState(QUuid componentId, bool expanded)
     component->second.expanded = expanded;
     emit componentExpandStateChanged(componentId);
     emit optionsChanged();
+}
+
+void Document::setComponentPolyCount(QUuid componentId, PolyCount count)
+{
+    if (componentId.isNull()) {
+        if (polyCount == count)
+            return;
+        polyCount = count;
+        emit componentPolyCountChanged(componentId);
+        emit skeletonChanged();
+        return;
+    }
+
+    Component *component = (Component *)findComponent(componentId);
+    if (nullptr == component)
+        return;
+    if (component->polyCount == count)
+        return;
+    
+    component->polyCount = count;
+    component->dirty = true;
+    emit componentPolyCountChanged(componentId);
+    emit skeletonChanged();
+}
+
+void Document::setComponentLayer(QUuid componentId, ComponentLayer layer)
+{
+    Component *component = (Component *)findComponent(componentId);
+    if (nullptr == component)
+        return;
+    if (component->layer == layer)
+        return;
+    
+    component->layer = layer;
+    component->dirty = true;
+    emit componentLayerChanged(componentId);
+    emit skeletonChanged();
+}
+
+void Document::setComponentClothStiffness(QUuid componentId, float stiffness)
+{
+    Component *component = (Component *)findComponent(componentId);
+    if (nullptr == component)
+        return;
+    if (qFuzzyCompare(component->clothStiffness, stiffness))
+        return;
+    
+    component->clothStiffness = stiffness;
+    component->dirty = true;
+    emit componentClothStiffnessChanged(componentId);
+    emit skeletonChanged();
+}
+
+void Document::setComponentClothIteration(QUuid componentId, size_t iteration)
+{
+    Component *component = (Component *)findComponent(componentId);
+    if (nullptr == component)
+        return;
+    if (component->clothIteration == iteration)
+        return;
+    
+    component->clothIteration = iteration;
+    component->dirty = true;
+    emit componentClothIterationChanged(componentId);
+    emit skeletonChanged();
+}
+
+void Document::setComponentClothForce(QUuid componentId, ClothForce force)
+{
+    Component *component = (Component *)findComponent(componentId);
+    if (nullptr == component)
+        return;
+    if (component->clothForce == force)
+        return;
+    
+    component->clothForce = force;
+    component->dirty = true;
+    emit componentClothForceChanged(componentId);
+    emit skeletonChanged();
+}
+
+void Document::setComponentClothOffset(QUuid componentId, float offset)
+{
+    Component *component = (Component *)findComponent(componentId);
+    if (nullptr == component)
+        return;
+    if (qFuzzyCompare(component->clothOffset, offset))
+        return;
+    
+    component->clothOffset = offset;
+    component->dirty = true;
+    emit componentClothOffsetChanged(componentId);
+    emit skeletonChanged();
 }
 
 void Document::createNewComponentAndMoveThisIn(QUuid componentId)
@@ -2103,9 +2879,9 @@ void Document::settleOrigin()
     QRectF mainProfile;
     QRectF sideProfile;
     snapshot.resolveBoundingBox(&mainProfile, &sideProfile);
-    originX = mainProfile.x() + mainProfile.width() / 2;
-    originY = mainProfile.y() + mainProfile.height() / 2;
-    originZ = sideProfile.x() + sideProfile.width() / 2;
+    setOriginX(mainProfile.x() + mainProfile.width() / 2);
+    setOriginY(mainProfile.y() + mainProfile.height() / 2);
+    setOriginZ(sideProfile.x() + sideProfile.width() / 2);
     markAllDirty();
     emit originChanged();
 }
@@ -2126,21 +2902,21 @@ void Document::setPartXmirrorState(QUuid partId, bool mirrored)
     emit skeletonChanged();
 }
 
-void Document::setPartZmirrorState(QUuid partId, bool mirrored)
-{
-    auto part = partMap.find(partId);
-    if (part == partMap.end()) {
-        qDebug() << "Part not found:" << partId;
-        return;
-    }
-    if (part->second.zMirrored == mirrored)
-        return;
-    part->second.zMirrored = mirrored;
-    part->second.dirty = true;
-    settleOrigin();
-    emit partZmirrorStateChanged(partId);
-    emit skeletonChanged();
-}
+//void Document::setPartZmirrorState(QUuid partId, bool mirrored)
+//{
+//    auto part = partMap.find(partId);
+//    if (part == partMap.end()) {
+//        qDebug() << "Part not found:" << partId;
+//        return;
+//    }
+//    if (part->second.zMirrored == mirrored)
+//        return;
+//    part->second.zMirrored = mirrored;
+//    part->second.dirty = true;
+//    settleOrigin();
+//    emit partZmirrorStateChanged(partId);
+//    emit skeletonChanged();
+//}
 
 void Document::setPartDeformThickness(QUuid partId, float thickness)
 {
@@ -2155,6 +2931,21 @@ void Document::setPartDeformThickness(QUuid partId, float thickness)
     emit skeletonChanged();
 }
 
+void Document::setPartBase(QUuid partId, PartBase base)
+{
+    auto part = partMap.find(partId);
+    if (part == partMap.end()) {
+        qDebug() << "Part not found:" << partId;
+        return;
+    }
+    if (part->second.base == base)
+        return;
+    part->second.base = base;
+    part->second.dirty = true;
+    emit partBaseChanged(partId);
+    emit skeletonChanged();
+}
+
 void Document::setPartDeformWidth(QUuid partId, float width)
 {
     auto part = partMap.find(partId);
@@ -2165,6 +2956,36 @@ void Document::setPartDeformWidth(QUuid partId, float width)
     part->second.setDeformWidth(width);
     part->second.dirty = true;
     emit partDeformWidthChanged(partId);
+    emit skeletonChanged();
+}
+
+void Document::setPartDeformMapImageId(QUuid partId, QUuid imageId)
+{
+    auto part = partMap.find(partId);
+    if (part == partMap.end()) {
+        qDebug() << "Part not found:" << partId;
+        return;
+    }
+    if (part->second.deformMapImageId == imageId)
+        return;
+    part->second.deformMapImageId = imageId;
+    part->second.dirty = true;
+    emit partDeformMapImageIdChanged(partId);
+    emit skeletonChanged();
+}
+
+void Document::setPartDeformMapScale(QUuid partId, float scale)
+{
+    auto part = partMap.find(partId);
+    if (part == partMap.end()) {
+        qDebug() << "Part not found:" << partId;
+        return;
+    }
+    if (qFuzzyCompare(part->second.deformMapScale, scale))
+        return;
+    part->second.deformMapScale = scale;
+    part->second.dirty = true;
+    emit partDeformMapScaleChanged(partId);
     emit skeletonChanged();
 }
 
@@ -2198,6 +3019,81 @@ void Document::setPartRoundState(QUuid partId, bool rounded)
     emit skeletonChanged();
 }
 
+void Document::setPartChamferState(QUuid partId, bool chamfered)
+{
+    auto part = partMap.find(partId);
+    if (part == partMap.end()) {
+        qDebug() << "Part not found:" << partId;
+        return;
+    }
+    if (part->second.chamfered == chamfered)
+        return;
+    part->second.chamfered = chamfered;
+    part->second.dirty = true;
+    emit partChamferStateChanged(partId);
+    emit skeletonChanged();
+}
+
+void Document::setPartTarget(QUuid partId, PartTarget target)
+{
+    auto part = partMap.find(partId);
+    if (part == partMap.end()) {
+        qDebug() << "Part not found:" << partId;
+        return;
+    }
+    if (part->second.target == target)
+        return;
+    part->second.target = target;
+    part->second.dirty = true;
+    emit partTargetChanged(partId);
+    emit skeletonChanged();
+}
+
+void Document::setPartColorSolubility(QUuid partId, float solubility)
+{
+    auto part = partMap.find(partId);
+    if (part == partMap.end()) {
+        qDebug() << "Part not found:" << partId;
+        return;
+    }
+    if (qFuzzyCompare(part->second.colorSolubility, solubility))
+        return;
+    part->second.colorSolubility = solubility;
+    part->second.dirty = true;
+    emit partColorSolubilityChanged(partId);
+    emit skeletonChanged();
+}
+
+void Document::setPartHollowThickness(QUuid partId, float hollowThickness)
+{
+    auto part = partMap.find(partId);
+    if (part == partMap.end()) {
+        qDebug() << "Part not found:" << partId;
+        return;
+    }
+    if (qFuzzyCompare(part->second.hollowThickness, hollowThickness))
+        return;
+    part->second.hollowThickness = hollowThickness;
+    part->second.dirty = true;
+    emit partHollowThicknessChanged(partId);
+    emit skeletonChanged();
+}
+
+void Document::setPartCountershaded(QUuid partId, bool countershaded)
+{
+    auto part = partMap.find(partId);
+    if (part == partMap.end()) {
+        qDebug() << "Part not found:" << partId;
+        return;
+    }
+    if (part->second.countershaded == countershaded)
+        return;
+    part->second.countershaded = countershaded;
+    part->second.dirty = true;
+    emit partCountershadeStateChanged(partId);
+    emit textureChanged();
+}
+
 void Document::setPartCutRotation(QUuid partId, float cutRotation)
 {
     auto part = partMap.find(partId);
@@ -2213,18 +3109,34 @@ void Document::setPartCutRotation(QUuid partId, float cutRotation)
     emit skeletonChanged();
 }
 
-void Document::setPartCutTemplate(QUuid partId, std::vector<QVector2D> cutTemplate)
+void Document::setPartCutFace(QUuid partId, CutFace cutFace)
 {
     auto part = partMap.find(partId);
     if (part == partMap.end()) {
         qDebug() << "Part not found:" << partId;
         return;
     }
-    if (cutTemplatePointsCompare(cutTemplate, part->second.cutTemplate))
+    if (part->second.cutFace == cutFace)
         return;
-    part->second.setCutTemplate(cutTemplate);
+    part->second.setCutFace(cutFace);
     part->second.dirty = true;
-    emit partCutTemplateChanged(partId);
+    emit partCutFaceChanged(partId);
+    emit skeletonChanged();
+}
+
+void Document::setPartCutFaceLinkedId(QUuid partId, QUuid linkedId)
+{
+    auto part = partMap.find(partId);
+    if (part == partMap.end()) {
+        qDebug() << "Part not found:" << partId;
+        return;
+    }
+    if (part->second.cutFace == CutFace::UserDefined &&
+            part->second.cutFaceLinkedId == linkedId)
+        return;
+    part->second.setCutFaceLinkedId(linkedId);
+    part->second.dirty = true;
+    emit partCutFaceChanged(partId);
     emit skeletonChanged();
 }
 
@@ -2247,16 +3159,18 @@ void Document::setPartColorState(QUuid partId, bool hasColor, QColor color)
 void Document::saveSnapshot()
 {
     HistoryItem item;
+    QElapsedTimer elapsedTimer;
+    elapsedTimer.start();
     toSnapshot(&item.snapshot);
-    item.hash = item.snapshot.hash();
-    if (!m_undoItems.empty() && item.hash == m_undoItems[m_undoItems.size() - 1].hash) {
-        qDebug() << "Snapshot has the same hash:" << item.hash << "skipped";
-        return;
-    }
+    //item.hash = item.snapshot.hash();
+    //if (!m_undoItems.empty() && item.hash == m_undoItems[m_undoItems.size() - 1].hash) {
+    //    qDebug() << "Snapshot has the same hash:" << item.hash << "skipped";
+    //    return;
+    //}
     if (m_undoItems.size() + 1 > m_maxSnapshot)
         m_undoItems.pop_front();
     m_undoItems.push_back(item);
-    qDebug() << "Snapshot saved with hash:" << item.hash << " History count:" << m_undoItems.size();
+    qDebug() << "Snapshot saved with hash:" << item.hash << " Time consumed:" << elapsedTimer.elapsed() << "History count:" << m_undoItems.size();
 }
 
 void Document::undo()
@@ -2295,7 +3209,8 @@ void Document::paste()
         QXmlStreamReader xmlStreamReader(mimeData->text());
         Snapshot snapshot;
         loadSkeletonFromXmlStream(&snapshot, xmlStreamReader);
-        addFromSnapshot(snapshot, true);
+        addFromSnapshot(snapshot, SnapshotSource::Paste);
+        saveSnapshot();
     }
 }
 
@@ -2426,11 +3341,6 @@ void Document::checkExportReadyState()
         emit exportReady();
 }
 
-void Document::setSharedContextWidget(QOpenGLWidget *sharedContextWidget)
-{
-    m_sharedContextWidget = sharedContextWidget;
-}
-
 void Document::collectComponentDescendantParts(QUuid componentId, std::vector<QUuid> &partIds) const
 {
     const Component *component = findComponent(componentId);
@@ -2505,6 +3415,20 @@ void Document::showAllComponents()
     for (const auto &part: partMap) {
         setPartVisibleState(part.first, true);
     }
+}
+
+void Document::showOrHideAllComponents()
+{
+    bool foundVisiblePart = false;
+    for (const auto &part: partMap) {
+        if (part.second.visible) {
+            foundVisiblePart = true;
+        }
+    }
+    if (foundVisiblePart)
+        hideAllComponents();
+    else
+        showAllComponents();
 }
 
 void Document::collapseAllComponents()
@@ -2603,7 +3527,7 @@ void Document::generateRig()
 
 void Document::rigReady()
 {
-    m_currentRigSucceed = m_rigGenerator->isSucceed();
+    m_currentRigSucceed = m_rigGenerator->isSuccessful();
 
     delete m_resultRigWeightMesh;
     m_resultRigWeightMesh = m_rigGenerator->takeResultMesh();
@@ -2709,7 +3633,7 @@ void Document::generateMotions()
     m_motionsGenerator = new MotionsGenerator(rigType, rigBones, rigWeights, currentRiggedOutcome());
     bool hasDirtyMotion = false;
     for (const auto &pose: poseMap) {
-        m_motionsGenerator->addPoseToLibrary(pose.first, pose.second.frames);
+        m_motionsGenerator->addPoseToLibrary(pose.first, pose.second.frames, pose.second.yTranslationScale);
     }
     for (auto &motion: motionMap) {
         if (motion.second.dirty) {
@@ -2808,7 +3732,7 @@ void Document::posePreviewsReady()
     for (const auto &poseIdAndFrame: m_posePreviewsGenerator->generatedPreviewPoseIdAndFrames()) {
         auto pose = poseMap.find(poseIdAndFrame.first);
         if (pose != poseMap.end()) {
-            MeshLoader *resultPartPreviewMesh = m_posePreviewsGenerator->takePreview(poseIdAndFrame);
+            Model *resultPartPreviewMesh = m_posePreviewsGenerator->takePreview(poseIdAndFrame);
             pose->second.updatePreviewMesh(resultPartPreviewMesh);
             emit posePreviewChanged(poseIdAndFrame.first);
         }
@@ -2824,6 +3748,12 @@ void Document::posePreviewsReady()
 
 void Document::addMaterial(QUuid materialId, QString name, std::vector<MaterialLayer> layers)
 {
+    auto findMaterialResult = materialMap.find(materialId);
+    if (findMaterialResult != materialMap.end()) {
+        qDebug() << "Material already exist:" << materialId;
+        return;
+    }
+    
     QUuid newMaterialId = materialId;
     auto &material = materialMap[newMaterialId];
     material.id = newMaterialId;
@@ -2880,6 +3810,7 @@ void Document::renameMaterial(QUuid materialId, QString name)
     
     findMaterialResult->second.name = name;
     emit materialNameChanged(materialId);
+    emit materialListChanged();
     emit optionsChanged();
 }
 
@@ -2921,7 +3852,7 @@ void Document::materialPreviewsReady()
     for (const auto &materialId: m_materialPreviewsGenerator->generatedPreviewMaterialIds()) {
         auto material = materialMap.find(materialId);
         if (material != materialMap.end()) {
-            MeshLoader *resultPartPreviewMesh = m_materialPreviewsGenerator->takePreview(materialId);
+            Model *resultPartPreviewMesh = m_materialPreviewsGenerator->takePreview(materialId);
             material->second.updatePreviewMesh(resultPartPreviewMesh);
             emit materialPreviewChanged(materialId);
         }
@@ -2940,6 +3871,16 @@ bool Document::isMeshGenerating() const
     return nullptr != m_meshGenerator;
 }
 
+bool Document::isPostProcessing() const
+{
+    return nullptr != m_postProcessor;
+}
+
+bool Document::isTextureGenerating() const
+{
+    return nullptr != m_textureGenerator;
+}
+
 void Document::copyNodes(std::set<QUuid> nodeIdSet) const
 {
     Snapshot snapshot;
@@ -2949,4 +3890,218 @@ void Document::copyNodes(std::set<QUuid> nodeIdSet) const
     saveSkeletonToXmlStream(&snapshot, &xmlStreamWriter);
     QClipboard *clipboard = QApplication::clipboard();
     clipboard->setText(snapshotXml);
+}
+
+void Document::initScript(const QString &script)
+{
+    m_script = script;
+    emit scriptModifiedFromExternal();
+}
+
+void Document::updateScript(const QString &script)
+{
+    if (m_script == script)
+        return;
+    
+    m_script = script;
+    emit scriptChanged();
+}
+
+void Document::updateVariable(const QString &name, const std::map<QString, QString> &value)
+{
+    bool needRunScript = false;
+    auto variable = m_cachedVariables.find(name);
+    if (variable == m_cachedVariables.end()) {
+        m_cachedVariables[name] = value;
+        needRunScript = true;
+    } else if (variable->second != value) {
+        variable->second = value;
+    } else {
+        return;
+    }
+    m_mergedVariables[name] = value;
+    emit mergedVaraiblesChanged();
+    if (needRunScript)
+        runScript();
+}
+
+void Document::updateVariableValue(const QString &name, const QString &value)
+{
+    auto variable = m_cachedVariables.find(name);
+    if (variable == m_cachedVariables.end()) {
+        qDebug() << "Update a nonexist variable:" << name << "value:" << value;
+        return;
+    }
+    auto &variableValue = variable->second["value"];
+    if (variableValue == value)
+        return;
+    variableValue = value;
+    m_mergedVariables[name] = variable->second;
+    runScript();
+}
+
+bool Document::updateDefaultVariables(const std::map<QString, std::map<QString, QString>> &defaultVariables)
+{
+    bool updated = false;
+    for (const auto &it: defaultVariables) {
+        auto findMergedVariable = m_mergedVariables.find(it.first);
+        if (findMergedVariable != m_mergedVariables.end()) {
+            bool hasChangedAttribute = false;
+            for (const auto &attribute: it.second) {
+                if (attribute.first == "value")
+                    continue;
+                const auto &findMatch = findMergedVariable->second.find(attribute.first);
+                if (findMatch != findMergedVariable->second.end()) {
+                    if (findMatch->second == attribute.second)
+                        continue;
+                }
+                hasChangedAttribute = true;
+            }
+            if (!hasChangedAttribute)
+                continue;
+        }
+        updated = true;
+        auto findCached = m_cachedVariables.find(it.first);
+        if (findCached != m_cachedVariables.end()) {
+            m_mergedVariables[it.first] = it.second;
+            m_mergedVariables[it.first]["value"] = valueOfKeyInMapOrEmpty(findCached->second, "value");
+        } else {
+            m_mergedVariables[it.first] = it.second;
+            m_cachedVariables[it.first] = it.second;
+        }
+    }
+    std::vector<QString> eraseList;
+    for (const auto &it: m_mergedVariables) {
+        if (defaultVariables.end() == defaultVariables.find(it.first)) {
+            eraseList.push_back(it.first);
+            updated = true;
+        }
+    }
+    for (const auto &it: eraseList) {
+        m_mergedVariables.erase(it);
+    }
+    if (updated) {
+        emit mergedVaraiblesChanged();
+    }
+    return updated;
+}
+
+void Document::runScript()
+{
+    if (nullptr != m_scriptRunner) {
+        m_isScriptResultObsolete = true;
+        return;
+    }
+    
+    m_isScriptResultObsolete = false;
+    
+    qDebug() << "Script running..";
+    
+    QThread *thread = new QThread;
+
+    m_scriptRunner = new ScriptRunner();
+    m_scriptRunner->moveToThread(thread);
+    m_scriptRunner->setScript(new QString(m_script));
+    m_scriptRunner->setVariables(new std::map<QString, std::map<QString, QString>>(
+        m_mergedVariables.empty() ? m_cachedVariables : m_mergedVariables
+        ));
+    connect(thread, &QThread::started, m_scriptRunner, &ScriptRunner::process);
+    connect(m_scriptRunner, &ScriptRunner::finished, this, &Document::scriptResultReady);
+    connect(m_scriptRunner, &ScriptRunner::finished, thread, &QThread::quit);
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+    emit scriptRunning();
+    thread->start();
+}
+
+void Document::scriptResultReady()
+{
+    Snapshot *snapshot = m_scriptRunner->takeResultSnapshot();
+    std::map<QString, std::map<QString, QString>> *defaultVariables = m_scriptRunner->takeDefaultVariables();
+    bool errorChanged = false;
+    bool consoleLogChanged = false;
+    bool mergedVariablesChanged = false;
+    
+    const QString &scriptError = m_scriptRunner->scriptError();
+    if (m_scriptError != scriptError) {
+        m_scriptError = scriptError;
+        errorChanged = true;
+    }
+    
+    const QString &consoleLog = m_scriptRunner->consoleLog();
+    if (m_scriptConsoleLog != consoleLog) {
+        m_scriptConsoleLog = consoleLog;
+        consoleLogChanged = true;
+    }
+    
+    if (nullptr != snapshot) {
+        fromSnapshot(*snapshot);
+        delete snapshot;
+        saveSnapshot();
+    }
+    
+    if (nullptr != defaultVariables) {
+        mergedVariablesChanged = updateDefaultVariables(*defaultVariables);
+        delete defaultVariables;
+    }
+
+    delete m_scriptRunner;
+    m_scriptRunner = nullptr;
+    
+    if (errorChanged)
+        emit scriptErrorChanged();
+    
+    if (consoleLogChanged)
+        emit scriptConsoleLogChanged();
+    
+    qDebug() << "Script run done";
+
+    if (m_isScriptResultObsolete || mergedVariablesChanged) {
+        runScript();
+    }
+}
+
+const QString &Document::script() const
+{
+    return m_script;
+}
+
+const std::map<QString, std::map<QString, QString>> &Document::variables() const
+{
+    return m_mergedVariables;
+}
+
+const QString &Document::scriptError() const
+{
+    return m_scriptError;
+}
+
+const QString &Document::scriptConsoleLog() const
+{
+    return m_scriptConsoleLog;
+}
+
+void Document::startPaint(void)
+{
+}
+
+void Document::stopPaint(void)
+{
+    if (m_mousePicker || m_isMouseTargetResultObsolete) {
+        m_saveNextPaintSnapshot = true;
+        return;
+    }
+    saveSnapshot();
+    for (const auto &it: partMap) {
+        m_intermediatePaintImageIds.erase(it.second.deformMapImageId);
+    }
+    for (const auto &it: m_intermediatePaintImageIds) {
+        //qDebug() << "Remove intermediate image:" << it;
+        ImageForever::remove(it);
+    }
+    m_intermediatePaintImageIds.clear();
+}
+
+void Document::setMousePickMaskNodeIds(const std::set<QUuid> &nodeIds)
+{
+    m_mousePickMaskNodeIds = nodeIds;
 }

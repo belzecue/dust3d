@@ -23,12 +23,17 @@ Outcome *MeshResultPostProcessor::takePostProcessedOutcome()
 
 void MeshResultPostProcessor::poseProcess()
 {
+#ifndef NDEBUG
+    return;
+#endif
     if (!m_outcome->nodes.empty()) {
         {
             std::vector<std::vector<QVector2D>> triangleVertexUvs;
             std::set<int> seamVertices;
-            uvUnwrap(*m_outcome, triangleVertexUvs, seamVertices);
+            std::map<QUuid, std::vector<QRectF>> partUvRects;
+            uvUnwrap(*m_outcome, triangleVertexUvs, seamVertices, partUvRects);
             m_outcome->setTriangleVertexUvs(triangleVertexUvs);
+            m_outcome->setPartUvRects(partUvRects);
         }
         
         {
