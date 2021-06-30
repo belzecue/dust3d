@@ -3,8 +3,10 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QMouseEvent>
-#include "document.h"
 #include "modelwidget.h"
+#include "cutface.h"
+
+class Document;
 
 class PartWidget : public QWidget
 {
@@ -18,6 +20,7 @@ signals:
     void setPartZmirrorState(QUuid partId, bool mirrored);
     void setPartDeformThickness(QUuid partId, float thickness);
     void setPartDeformWidth(QUuid partId, float width);
+    void setPartDeformUnified(QUuid partId, bool unified);
     void setPartDeformMapImageId(QUuid partId, QUuid imageId);
     void setPartDeformMapScale(QUuid partId, float scale);
     void setPartRoundState(QUuid partId, bool rounded);
@@ -28,8 +31,11 @@ signals:
     void setPartCutFaceLinkedId(QUuid partId, QUuid linkedId);
     void setPartMaterialId(QUuid partId, QUuid materialId);
     void setPartColorSolubility(QUuid partId, float colorSolubility);
+    void setPartMetalness(QUuid partId, float metalness);
+    void setPartRoughness(QUuid partId, float roughness);
     void setPartHollowThickness(QUuid partId, float hollowThickness);
     void setPartCountershaded(QUuid partId, bool countershaded);
+    void setPartSmoothState(QUuid partId, bool smooth);
     void movePartUp(QUuid partId);
     void movePartDown(QUuid partId);
     void movePartToTop(QUuid partId);
@@ -43,6 +49,7 @@ public:
     void reload();
     void updatePreview();
     void updateLockButton();
+    void updateSmoothButton();
     void updateVisibleButton();
     void updateSubdivButton();
     void updateDisableButton();
@@ -63,24 +70,26 @@ public slots:
     void showDeformSettingPopup(const QPoint &pos);
     void showCutRotationSettingPopup(const QPoint &pos);
     void showColorSettingPopup(const QPoint &pos);
-private: // need initialize
-    const Document *m_document;
-    QUuid m_partId;
-    bool m_unnormal;
 private:
-    ModelWidget *m_previewWidget;
-    QPushButton *m_visibleButton;
-    QPushButton *m_lockButton;
-    QPushButton *m_subdivButton;
-    QPushButton *m_disableButton;
-    QPushButton *m_xMirrorButton;
-    QPushButton *m_zMirrorButton;
-    QPushButton *m_deformButton;
-    QPushButton *m_roundButton;
-    QPushButton *m_chamferButton;
-    QPushButton *m_colorButton;
-    QPushButton *m_cutRotationButton;
-    QWidget *m_backgroundWidget;
+    const Document *m_document = nullptr;
+    QUuid m_partId;
+    bool m_unnormal = false;
+private:
+    ModelWidget *m_previewWidget = nullptr;
+    QPushButton *m_visibleButton = nullptr;
+    QPushButton *m_smoothButton = nullptr;
+    QPushButton *m_lockButton = nullptr;
+    QPushButton *m_subdivButton = nullptr;
+    QPushButton *m_disableButton = nullptr;
+    QPushButton *m_xMirrorButton = nullptr;
+    QPushButton *m_zMirrorButton = nullptr;
+    QPushButton *m_deformButton = nullptr;
+    QPushButton *m_roundButton = nullptr;
+    QPushButton *m_chamferButton = nullptr;
+    QPushButton *m_colorButton = nullptr;
+    QPushButton *m_cutRotationButton = nullptr;
+    QWidget *m_backgroundWidget = nullptr;
+    QLabel *m_previewLabel = nullptr;
 private:
     void initToolButton(QPushButton *button);
     void initToolButtonWithoutFont(QPushButton *button);

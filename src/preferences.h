@@ -3,6 +3,7 @@
 #include <QSettings>
 #include <QColor>
 #include <QSize>
+#include <QStringList>
 #include "combinemode.h"
 #include "toonline.h"
 
@@ -15,11 +16,15 @@ public:
     CombineMode componentCombineMode() const;
     const QColor &partColor() const;
     bool flatShading() const;
+    bool scriptEnabled() const;
+    bool interpolationEnabled() const;
     bool toonShading() const;
     ToonLine toonLine() const;
     QSize documentWindowSize() const;
     void setDocumentWindowSize(const QSize&);
     int textureSize() const;
+    QStringList recentFileList() const;
+    int maxRecentFiles() const;
 signals:
     void componentCombineModeChanged();
     void partColorChanged();
@@ -27,6 +32,8 @@ signals:
     void toonShadingChanged();
     void toonLineChanged();
     void textureSizeChanged();
+    void interpolationEnabledChanged();
+    void scriptEnabledChanged();
 public slots:
     void setComponentCombineMode(CombineMode mode);
     void setPartColor(const QColor &color);
@@ -34,6 +41,9 @@ public slots:
     void setToonShading(bool toonShading);
     void setToonLine(ToonLine toonLine);
     void setTextureSize(int textureSize);
+    void setScriptEnabled(bool enabled);
+    void setInterpolationEnabled(bool enabled);
+    void setCurrentFile(const QString &fileName);
     void reset();
 private:
     CombineMode m_componentCombineMode;
@@ -43,6 +53,8 @@ private:
     ToonLine m_toonLine;
     QSettings m_settings;
     int m_textureSize;
+    bool m_scriptEnabled;
+    bool m_interpolationEnabled;
 private:
     void loadDefault();
 };

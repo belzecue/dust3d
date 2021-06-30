@@ -5,7 +5,12 @@
 #include <QMouseEvent>
 #include <QTreeWidgetItem>
 #include <QTimer>
-#include "document.h"
+#include <set>
+#include "parttarget.h"
+#include "partbase.h"
+#include "combinemode.h"
+
+class Document;
 
 class PartTreeWidget : public QTreeWidget
 {
@@ -21,10 +26,6 @@ signals:
     void createNewChildComponent(QUuid parentComponentId);
     void renameComponent(QUuid componentId, QString name);
     void setComponentExpandState(QUuid componentId, bool expanded);
-    void setComponentSmoothAll(QUuid componentId, float toSmoothAll);
-    void setComponentSmoothSeam(QUuid componentId, float toSmoothSeam);
-    void setComponentPolyCount(QUuid componentId, PolyCount count);
-    void setComponentLayer(QUuid componentId, ComponentLayer layer);
     void setPartTarget(QUuid partId, PartTarget target);
     void setPartBase(QUuid partId, PartBase base);
     void moveComponent(QUuid componentId, QUuid toParentId);
@@ -42,10 +43,6 @@ signals:
     void setPartVisibleState(QUuid partId, bool visible);
     void setPartColorState(QUuid partId, bool hasColor, QColor color);
     void setComponentCombineMode(QUuid componentId, CombineMode combineMode);
-    void setComponentClothStiffness(QUuid componentId, float clothStiffness);
-    void setComponentClothIteration(QUuid componentId, size_t iteration);
-    void setComponentClothForce(QUuid componentId, ClothForce force);
-    void setComponentClothOffset(QUuid componentId, float offset);
     void hideDescendantComponents(QUuid componentId);
     void showDescendantComponents(QUuid componentId);
     void lockDescendantComponents(QUuid componentId);
@@ -79,7 +76,10 @@ public slots:
     void partHollowThicknessChanged(QUuid partId);
     void partMaterialIdChanged(QUuid partId);
     void partColorSolubilityChanged(QUuid partId);
+    void partMetalnessChanged(QUuid partId);
+    void partRoughnessChanged(QUuid partId);
     void partCountershadeStateChanged(QUuid partId);
+    void partSmoothStateChanged(QUuid partId);
     void partChecked(QUuid partId);
     void partUnchecked(QUuid partId);
     void partComponentChecked(QUuid partId);
@@ -88,7 +88,6 @@ public slots:
     void groupCollapsed(QTreeWidgetItem *item);
     void removeAllContent();
     void showContextMenu(const QPoint &pos, bool shorted=false);
-    void showClothSettingMenu(const QPoint &pos, const QUuid &componentId);
 protected:
     QSize sizeHint() const override;
     void mousePressEvent(QMouseEvent *event) override;
@@ -97,7 +96,6 @@ private:
     void addComponentChildrenToItem(QUuid componentId, QTreeWidgetItem *parentItem);
     void deleteItemChildren(QTreeWidgetItem *item);
     void selectComponent(QUuid componentId, bool multiple=false);
-    QWidget *createSmoothMenuWidget(QUuid componentId);
     void updateComponentSelectState(QUuid componentId, bool selected);
     void updateComponentAppearance(QUuid componentId);
     bool isComponentSelected(QUuid componentId);
@@ -108,7 +106,7 @@ private:
 private:
     const Document *m_document = nullptr;
     QTreeWidgetItem *m_rootItem = nullptr;
-    QTimer *m_delayedMousePressTimer = nullptr;
+    //QTimer *m_delayedMousePressTimer = nullptr;
     bool m_firstSelect = true;
     std::map<QUuid, QTreeWidgetItem *> m_partItemMap;
     std::map<QUuid, QTreeWidgetItem *> m_componentItemMap;

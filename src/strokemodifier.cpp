@@ -1,11 +1,18 @@
 #include <QVector2D>
 #include <QDebug>
+#include <unordered_map>
 #include "strokemodifier.h"
 #include "util.h"
+#include "centripetalcatmullromspline.h"
 
 void StrokeModifier::enableIntermediateAddition()
 {
     m_intermediateAdditionEnabled = true;
+}
+
+void StrokeModifier::enableSmooth()
+{
+    m_smooth = true;
 }
 
 size_t StrokeModifier::addNode(const QVector3D &position, float radius, const std::vector<QVector2D> &cutTemplate, float cutRotation)
@@ -176,6 +183,78 @@ void StrokeModifier::finalize()
         for (size_t i = 1; i < nodeIndices.size(); ++i) {
             addEdge(nodeIndices[i - 1], nodeIndices[i]);
         }
+    }
+    
+    if (m_smooth)
+        smooth();
+}
+
+void StrokeModifier::smooth()
+{
+    std::unordered_map<int, std::vector<int>> neighborMap;
+    for (const auto &edge: m_edges) {
+        neighborMap[edge.firstNodeIndex].push_back(edge.secondNodeIndex);
+        neighborMap[edge.secondNodeIndex].push_back(edge.firstNodeIndex);
+    }
+    
+    int startEndpoint = 0;
+    for (const auto &edge: m_edges) {
+        auto findNeighbor = neighborMap.find(edge.firstNodeIndex);
+        if (findNeighbor == neighborMap.end())
+            continue;
+        if (1 != findNeighbor->second.size()) {
+            auto findNeighborNeighbor = neighborMap.find(edge.secondNodeIndex);
+            if (findNeighborNeighbor == neighborMap.end())
+                continue;
+            if (1 != findNeighborNeighbor->second.size())
+                continue;
+            startEndpoint = edge.secondNodeIndex;
+        } else {
+            startEndpoint = edge.firstNodeIndex;
+        }
+        break;
+    }
+    if (-1 == startEndpoint)
+        return;
+    
+    int loopIndex = startEndpoint;
+    int previousIndex = -1;
+    bool isRing = false;
+    std::vector<int> loop;
+    while (-1 != loopIndex) {
+        loop.push_back(loopIndex);
+        auto findNeighbor = neighborMap.find(loopIndex);
+        if (findNeighbor == neighborMap.end())
+            return;
+        int nextIndex = -1;
+        for (const auto &index: findNeighbor->second) {
+            if (index == previousIndex)
+                continue;
+            if (index == startEndpoint) {
+                isRing = true;
+                break;
+            }
+            nextIndex = index;
+            break;
+        }
+        previousIndex = loopIndex;
+        loopIndex = nextIndex;
+    }
+    
+    CentripetalCatmullRomSpline spline(isRing);
+    for (size_t i = 0; i < loop.size(); ++i) {
+        const auto &nodeIndex = loop[i];
+        const auto &node = m_nodes[nodeIndex];
+        bool isKnot = node.originNodeIndex == nodeIndex;
+        spline.addPoint((int)nodeIndex, node.position, isKnot);
+    }
+    if (!spline.interpolate())
+        return;
+    for (const auto &it: spline.splineNodes()) {
+        if (-1 == it.source)
+            continue;
+        auto &node = m_nodes[it.source];
+        node.position = it.position;
     }
 }
 

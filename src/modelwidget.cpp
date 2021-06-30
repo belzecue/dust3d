@@ -18,18 +18,10 @@ float ModelWidget::m_maxZoomRatio = 80.0;
 int ModelWidget::m_defaultXRotation = 30 * 16;
 int ModelWidget::m_defaultYRotation = -45 * 16;
 int ModelWidget::m_defaultZRotation = 0;
-QVector3D ModelWidget::m_defaultEyePosition = QVector3D(0, 0, -4.0);
+QVector3D ModelWidget::m_defaultEyePosition = QVector3D(0, 0, -2.5);
 
 ModelWidget::ModelWidget(QWidget *parent) :
-    QOpenGLWidget(parent),
-    m_xRot(m_defaultXRotation),
-    m_yRot(m_defaultYRotation),
-    m_zRot(m_defaultZRotation),
-    m_program(nullptr),
-    m_moveStarted(false),
-    m_moveEnabled(true),
-    m_zoomEnabled(true),
-    m_mousePickingEnabled(false)
+    QOpenGLWidget(parent)
 {
     // --transparent causes the clear color to be transparent. Therefore, on systems that
     // support it, the widget will become transparent apart from the logo.
@@ -329,11 +321,11 @@ void ModelWidget::toggleUvCheck()
     update();
 }
 
-bool ModelWidget::inputMousePressEventFromOtherWidget(QMouseEvent *event)
+bool ModelWidget::inputMousePressEventFromOtherWidget(QMouseEvent *event, bool notGraphics)
 {
     bool shouldStartMove = false;
     if (event->button() == Qt::LeftButton) {
-        if (QGuiApplication::queryKeyboardModifiers().testFlag(Qt::AltModifier) &&
+        if ((notGraphics || QGuiApplication::queryKeyboardModifiers().testFlag(Qt::AltModifier)) &&
                 !QGuiApplication::queryKeyboardModifiers().testFlag(Qt::ControlModifier)) {
             shouldStartMove = m_moveEnabled;
         }
@@ -437,7 +429,7 @@ bool ModelWidget::inputWheelEventFromOtherWidget(QWheelEvent *event)
     
     if (m_mousePickingEnabled) {
         if (QGuiApplication::queryKeyboardModifiers().testFlag(Qt::ShiftModifier)) {
-            emit addMouseRadius((float)event->delta() / 40 / height());
+            emit addMouseRadius((float)event->delta() / 200 / height());
             return true;
         }
     }
@@ -504,6 +496,12 @@ void ModelWidget::updateMesh(Model *mesh)
     update();
 }
 
+void ModelWidget::updateColorTexture(QImage *colorTextureImage)
+{
+    m_meshBinder.updateColorTexture(colorTextureImage);
+    update();
+}
+
 void ModelWidget::fetchCurrentToonNormalAndDepthMaps(QImage *normalMap, QImage *depthMap)
 {
     m_meshBinder.fetchCurrentToonNormalAndDepthMaps(normalMap, depthMap);
@@ -547,7 +545,7 @@ void ModelWidget::setMoveAndZoomByWindow(bool byWindow)
 
 void ModelWidget::mousePressEvent(QMouseEvent *event)
 {
-    inputMousePressEventFromOtherWidget(event);
+    inputMousePressEventFromOtherWidget(event, m_notGraphics);
 }
 
 void ModelWidget::mouseMoveEvent(QMouseEvent *event)
@@ -565,3 +563,7 @@ void ModelWidget::mouseReleaseEvent(QMouseEvent *event)
     inputMouseReleaseEventFromOtherWidget(event);
 }
 
+void ModelWidget::setNotGraphics(bool notGraphics)
+{
+    m_notGraphics = notGraphics;
+}

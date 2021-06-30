@@ -5,6 +5,7 @@
 #include "meshstitcher.h"
 #include "util.h"
 #include "boxmesh.h"
+#include "remeshhole.h"
 
 size_t StrokeMeshBuilder::Node::nextOrNeighborOtherThan(size_t neighborIndex) const
 {
@@ -39,12 +40,17 @@ void StrokeMeshBuilder::enableBaseNormalAverage(bool enabled)
 
 void StrokeMeshBuilder::setDeformThickness(float thickness)
 {
-    m_deformThickness = thickness;
+    m_deformThickness = std::max((float)0.01, thickness);
 }
 
 void StrokeMeshBuilder::setDeformWidth(float width)
 {
-    m_deformWidth = width;
+    m_deformWidth = std::max((float)0.01, width);
+}
+
+void StrokeMeshBuilder::setDeformUnified(bool unified)
+{
+    m_deformUnified = unified;
 }
 
 void StrokeMeshBuilder::setDeformMapImage(const QImage *image)
@@ -225,7 +231,6 @@ void StrokeMeshBuilder::buildMesh()
         return;
     }
     
-    std::vector<std::vector<size_t>> cuts;
     for (size_t i = 0; i < m_nodeIndices.size(); ++i) {
         auto &node = m_nodes[m_nodeIndices[i]];
         if (!qFuzzyIsNull(node.cutRotation)) {
@@ -238,16 +243,80 @@ void StrokeMeshBuilder::buildMesh()
             node.traverseDirection, node.baseNormal);
         std::vector<size_t> cut;
         insertCutVertices(cutVertices, &cut, node.index, node.traverseDirection);
-        cuts.push_back(cut);
+        m_cuts.push_back(cut);
+    }
+}
+
+void StrokeMeshBuilder::interpolateCutEdges()
+{
+    if (m_cuts.empty())
+        return;
+    
+    size_t bigCutIndex = 0;
+    double maxRadius = 0.0;
+    for (size_t i = 0; i < m_cuts.size(); ++i) {
+        size_t j = (i + 1) % m_cuts.size();
+        if (m_cuts[i].size() != m_cuts[j].size())
+            return;
+        const auto &nodeIndex = m_generatedVerticesSourceNodeIndices[m_cuts[i][0]];
+        if (m_nodes[nodeIndex].radius > maxRadius) {
+            maxRadius = m_nodes[nodeIndex].radius;
+            bigCutIndex = i;
+        }
     }
     
-    // Stich cuts
+    const auto &cut = m_cuts[bigCutIndex];
+    double sumOfLegnth = 0;
+    std::vector<double> edgeLengths;
+    edgeLengths.reserve(cut.size());
+    for (size_t i = 0; i < cut.size(); ++i) {
+        size_t j = (i + 1) % cut.size();
+        double length = (m_generatedVertices[cut[i]] - m_generatedVertices[cut[j]]).length();
+        edgeLengths.push_back(length);
+        sumOfLegnth += length;
+    }
+    double targetLength = 1.2 * sumOfLegnth / cut.size();
+    std::vector<std::vector<size_t>> newCuts(m_cuts.size());
+    for (size_t index = 0; index < cut.size(); ++index) {
+        size_t nextIndex = (index + 1) % cut.size();
+        for (size_t cutIndex = 0; cutIndex < m_cuts.size(); ++cutIndex) {
+            newCuts[cutIndex].push_back(m_cuts[cutIndex][index]);
+        }
+        const auto &oldEdgeLength = edgeLengths[index];
+        if (targetLength >= oldEdgeLength)
+            continue;
+        size_t newInsertNum = oldEdgeLength / targetLength;
+        if (newInsertNum < 1)
+            newInsertNum = 1;
+        if (newInsertNum > 100)
+            continue;
+        float stepFactor = 1.0 / (newInsertNum + 1);
+        float factor = stepFactor;
+        for (size_t i = 0; i < newInsertNum && factor < 1.0; factor += stepFactor, ++i) {
+            float firstFactor = 1.0 - factor;
+            for (size_t cutIndex = 0; cutIndex < m_cuts.size(); ++cutIndex) {
+                auto newPosition = m_generatedVertices[m_cuts[cutIndex][index]] * firstFactor + m_generatedVertices[m_cuts[cutIndex][nextIndex]] * factor;
+                newCuts[cutIndex].push_back(m_generatedVertices.size());
+                m_generatedVertices.push_back(newPosition);
+                const auto &oldIndex = m_cuts[cutIndex][index];
+                m_generatedVerticesCutDirects.push_back(m_generatedVerticesCutDirects[oldIndex]);
+                m_generatedVerticesSourceNodeIndices.push_back(m_generatedVerticesSourceNodeIndices[oldIndex]);
+                m_generatedVerticesInfos.push_back(m_generatedVerticesInfos[oldIndex]);
+            }
+        }
+    }
+
+    m_cuts = newCuts;
+}
+
+void StrokeMeshBuilder::stitchCuts()
+{
     for (size_t i = m_isRing ? 0 : 1; i < m_nodeIndices.size(); ++i) {
         size_t h = (i + m_nodeIndices.size() - 1) % m_nodeIndices.size();
         const auto &nodeH = m_nodes[m_nodeIndices[h]];
         const auto &nodeI = m_nodes[m_nodeIndices[i]];
-        const auto &cutH = cuts[h];
-        auto reversedCutI = edgeloopFlipped(cuts[i]);
+        const auto &cutH = m_cuts[h];
+        auto reversedCutI = edgeloopFlipped(m_cuts[i]);
         std::vector<std::pair<std::vector<size_t>, QVector3D>> edgeLoops = {
             {cutH, -nodeH.traverseDirection},
             {reversedCutI, nodeI.traverseDirection},
@@ -262,7 +331,7 @@ void StrokeMeshBuilder::buildMesh()
     
     // Fill endpoints
     if (!m_isRing) {
-        if (cuts.size() < 2)
+        if (m_cuts.size() < 2)
             return;
         if (!qFuzzyIsNull(m_hollowThickness)) {
             // Generate mesh for hollow
@@ -288,8 +357,8 @@ void StrokeMeshBuilder::buildMesh()
                 m_generatedFaces.push_back(newFace);
             }
             
-            std::vector<std::vector<size_t>> revisedCuts = {cuts[0],
-                edgeloopFlipped(cuts[cuts.size() - 1])};
+            std::vector<std::vector<size_t>> revisedCuts = {m_cuts[0],
+                edgeloopFlipped(m_cuts[m_cuts.size() - 1])};
             for (const auto &cut: revisedCuts) {
                 for (size_t i = 0; i < cut.size(); ++i) {
                     size_t j = (i + 1) % cut.size();
@@ -302,8 +371,28 @@ void StrokeMeshBuilder::buildMesh()
                 }
             }
         } else {
-            m_generatedFaces.push_back(cuts[0]);
-            m_generatedFaces.push_back(edgeloopFlipped(cuts[cuts.size() - 1]));
+            if (m_cuts[0].size() <= 4) {
+                m_generatedFaces.push_back(m_cuts[0]);
+                m_generatedFaces.push_back(edgeloopFlipped(m_cuts[m_cuts.size() - 1]));
+            } else {
+                auto remeshAndAddCut = [&](const std::vector<size_t> &inputFace) {
+                    std::vector<std::vector<size_t>> remeshedFaces;
+                    size_t oldVertexCount = m_generatedVertices.size();
+                    remeshHole(m_generatedVertices,
+                        inputFace,
+                        remeshedFaces);
+                    size_t oldIndex = inputFace[0];
+                    for (size_t i = oldVertexCount; i < m_generatedVertices.size(); ++i) {
+                        m_generatedVerticesCutDirects.push_back(m_generatedVerticesCutDirects[oldIndex]);
+                        m_generatedVerticesSourceNodeIndices.push_back(m_generatedVerticesSourceNodeIndices[oldIndex]);
+                        m_generatedVerticesInfos.push_back(m_generatedVerticesInfos[oldIndex]);
+                    }
+                    for (const auto &it: remeshedFaces)
+                        m_generatedFaces.push_back(it);
+                };
+                remeshAndAddCut(m_cuts[0]);
+                remeshAndAddCut(edgeloopFlipped(m_cuts[m_cuts.size() - 1]));
+            }
         }
     }
 }
@@ -407,7 +496,7 @@ bool StrokeMeshBuilder::prepare()
     
     if (m_nodeIndices.empty())
         return false;
-    
+
     std::vector<QVector3D> edgeDirections;
     for (size_t i = 0; i < m_nodeIndices.size(); ++i) {
         m_nodes[m_nodeIndices[i]].traverseOrder = i;
@@ -580,7 +669,7 @@ bool StrokeMeshBuilder::calculateStartingNodeIndex(size_t *startingNodeIndex,
     }
     
     auto findNearestNodeWithWorldCenter = [&](const std::vector<size_t> &nodeIndices) {
-        std::vector<std::pair<size_t, float>> dist2Array(m_nodes.size());
+        std::vector<std::pair<size_t, float>> dist2Array;
         for (const auto &i: nodeIndices) {
             dist2Array.push_back({i, (float)m_nodes[i].position.lengthSquared()});
         }
@@ -665,6 +754,13 @@ QVector3D StrokeMeshBuilder::calculateDeformPosition(const QVector3D &vertexPosi
 
 void StrokeMeshBuilder::applyDeform()
 {
+    float maxRadius = 0.0;
+    if (m_deformUnified) {
+        for (const auto &node: m_nodes) {
+            if (node.radius > maxRadius)
+                maxRadius = node.radius;
+        }
+    }
     for (size_t i = 0; i < m_generatedVertices.size(); ++i) {
         auto &position = m_generatedVertices[i];
         const auto &node = m_nodes[m_generatedVerticesSourceNodeIndices[i]];
@@ -682,13 +778,14 @@ void StrokeMeshBuilder::applyDeform()
         }
         QVector3D sum;
         size_t count = 0;
+        float deformUnifyFactor = m_deformUnified ? maxRadius / node.radius : 1.0;
         if (!qFuzzyCompare(m_deformThickness, (float)1.0)) {
-            auto deformedPosition = calculateDeformPosition(position, ray, node.baseNormal, m_deformThickness);
+            auto deformedPosition = calculateDeformPosition(position, ray, node.baseNormal, m_deformThickness * deformUnifyFactor);
             sum += deformedPosition;
             ++count;
         }
         if (!qFuzzyCompare(m_deformWidth, (float)1.0)) {
-            auto deformedPosition = calculateDeformPosition(position, ray, QVector3D::crossProduct(node.baseNormal, cutDirect), m_deformWidth);
+            auto deformedPosition = calculateDeformPosition(position, ray, QVector3D::crossProduct(node.baseNormal, cutDirect), m_deformWidth * deformUnifyFactor);
             sum += deformedPosition;
             ++count;
         }
@@ -709,5 +806,7 @@ bool StrokeMeshBuilder::build()
     
     buildMesh();
     applyDeform();
+    interpolateCutEdges();
+    stitchCuts();
     return true;
 }

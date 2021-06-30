@@ -56,9 +56,6 @@ void NormalAndDepthMapsGenerator::generate()
 void NormalAndDepthMapsGenerator::process()
 {
     generate();
-    m_normalMapRender->setRenderThread(QGuiApplication::instance()->thread());
-    m_depthMapRender->setRenderThread(QGuiApplication::instance()->thread());
-    this->moveToThread(QGuiApplication::instance()->thread());
     emit finished();
 }
 

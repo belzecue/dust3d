@@ -47,6 +47,7 @@ public:
     void setNodeOriginInfo(size_t nodeIndex, int nearOriginNodeIndex, int farOriginNodeIndex);
     void setDeformThickness(float thickness);
     void setDeformWidth(float width);
+    void setDeformUnified(bool unified);
     void setDeformMapImage(const QImage *image);
     void setDeformMapScale(float scale);
     void setHollowThickness(float hollowThickness);
@@ -85,6 +86,7 @@ private:
     const QImage *m_deformMapImage = nullptr;
     float m_deformMapScale = 0.0f;
     float m_hollowThickness = 0.0f;
+    bool m_deformUnified = false;
     
     bool m_isRing = false;
     std::vector<size_t> m_nodeIndices;
@@ -93,6 +95,8 @@ private:
     std::vector<size_t> m_generatedVerticesSourceNodeIndices;
     std::vector<GeneratedVertexInfo> m_generatedVerticesInfos;
     std::vector<std::vector<size_t>> m_generatedFaces;
+    
+    std::vector<std::vector<size_t>> m_cuts;
     
     bool prepare();
     std::vector<QVector3D> makeCut(const QVector3D &cutCenter, 
@@ -114,6 +118,8 @@ private:
     std::vector<size_t> edgeloopFlipped(const std::vector<size_t> &edgeLoop);
     void reviseNodeBaseNormal(Node &node);
     void applyDeform();
+    void interpolateCutEdges();
+    void stitchCuts();
 };
 
 #endif

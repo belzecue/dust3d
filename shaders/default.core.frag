@@ -539,7 +539,7 @@ vec4 metalRoughFunction(const in vec4 baseColor,
         if (toonEdgeEnabled > 0) {
             float depthEdge = depthEdgeSobel();
             float normalEdge = normalEdgeSobel();
-            if (depthEdge >= 0.009 || normalEdge >= 0.6) {
+            if (depthEdge >= 0.009 || normalEdge >= 0.7) {
                 cLinear = hsv2rgb(vec3(hsv.r, hsv.g, hsv.b * 0.02));
             } else if (toonEdgeEnabled == 2) {
                 return vec4(0.0, 0.0, 0.0, 0.0);
@@ -548,7 +548,7 @@ vec4 metalRoughFunction(const in vec4 baseColor,
     }
 
     // Apply exposure correction
-    cLinear *= pow(2.0, exposure);
+    //cLinear *= pow(2.0, exposure);
 
     // Apply simple (Reinhard) tonemap transform to get into LDR range [0, 1]
     vec3 cToneMapped = toneMap(cLinear);
@@ -574,15 +574,15 @@ void main()
     lights[0].position = firstLightPos;
     lights[0].color = vec3(1.0, 1.0, 1.0);
     lights[0].intensity = 3.0;
-    lights[0].constantAttenuation = 0.0;
+    lights[0].constantAttenuation = 1.0;
     lights[0].linearAttenuation = 0.0;
-    lights[0].quadraticAttenuation = 0.0;
+    lights[0].quadraticAttenuation = 0.0025;
 
     // Fill light
     lights[1].type = TYPE_POINT;
     lights[1].position = secondLightPos;
     lights[1].color = vec3(1.0, 1.0, 1.0);
-    lights[1].intensity = 1.0;
+    lights[1].intensity = 0.1;
     lights[1].constantAttenuation = 0.0;
     lights[1].linearAttenuation = 0.0;
     lights[1].quadraticAttenuation = 0.0;
@@ -591,7 +591,7 @@ void main()
     lights[2].type = TYPE_POINT;
     lights[2].position = thirdLightPos;
     lights[2].color = vec3(1.0, 1.0, 1.0);
-    lights[2].intensity = 0.5;
+    lights[2].intensity = 0.05;
     lights[2].constantAttenuation = 0.0;
     lights[2].linearAttenuation = 0.0;
     lights[2].quadraticAttenuation = 0.0;
@@ -604,7 +604,8 @@ void main()
         alpha = textColor.a;
     }
     if (mousePickEnabled == 1) {
-        if (distance(mousePickTargetPosition, vertRaw) <= mousePickRadius) {
+        float dist = distance(mousePickTargetPosition, vertRaw);
+        if (dist <= mousePickRadius && dist >= mousePickRadius * 0.9) {
             color = color + vec3(0.99, 0.4, 0.13);
         }
     }
@@ -635,8 +636,8 @@ void main()
         ambientOcclusion = texture(metalnessRoughnessAmbientOcclusionMapId, vertTexCoord).r;
     }
     
+    roughness = min(0.99, roughness);
     if (environmentIrradianceMapEnabled != 1) {
-        roughness = min(0.99, roughness);
         metalness = min(0.99, metalness);
     }
     

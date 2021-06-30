@@ -10,6 +10,7 @@
 #include "jointnodetree.h"
 #include "util.h"
 #include "modelshaderprogram.h"
+#include "document.h"
 
 using namespace fbx;
 
@@ -2200,9 +2201,9 @@ void FbxFileWriter::createDefinitions(size_t deformerCount,
     m_fbxDocument.nodes.push_back(definitions);
 }
 
-FbxFileWriter::FbxFileWriter(Outcome &outcome,
-        const std::vector<RiggerBone> *resultRigBones,
-        const std::map<int, RiggerVertexWeights> *resultRigWeights,
+FbxFileWriter::FbxFileWriter(Object &object,
+        const std::vector<RigBone> *resultRigBones,
+        const std::map<int, RigVertexWeights> *resultRigWeights,
         const QString &filename,
         QImage *textureImage,
         QImage *normalImage,
@@ -2236,19 +2237,19 @@ FbxFileWriter::FbxFileWriter(Outcome &outcome,
     geometry.addProperty(std::vector<uint8_t>({'u','n','a','m','e','d','m','e','s','h',0,1,'G','e','o','m','e','t','r','y'}), 'S');
     geometry.addProperty("Mesh");
     std::vector<double> positions;
-    for (const auto &vertex: outcome.vertices) {
+    for (const auto &vertex: object.vertices) {
         positions.push_back((double)vertex.x());
         positions.push_back((double)vertex.y());
         positions.push_back((double)vertex.z());
     }
     std::vector<int32_t> indices;
-    for (const auto &triangle: outcome.triangles) {
+    for (const auto &triangle: object.triangles) {
         indices.push_back(triangle[0]);
         indices.push_back(triangle[1]);
         indices.push_back(triangle[2] ^ -1);
     }
     FBXNode layerElementNormal("LayerElementNormal");
-    const auto triangleVertexNormals = outcome.triangleVertexNormals();
+    const auto triangleVertexNormals = object.triangleVertexNormals();
     if (nullptr != triangleVertexNormals) {
         layerElementNormal.addProperty((int32_t)0);
         layerElementNormal.addPropertyNode("Version", (int32_t)101);
@@ -2268,7 +2269,7 @@ FbxFileWriter::FbxFileWriter(Outcome &outcome,
         layerElementNormal.addChild(FBXNode());
     }
     FBXNode layerElementUv("LayerElementUV");
-    const auto triangleVertexUvs = outcome.triangleVertexUvs();
+    const auto triangleVertexUvs = object.triangleVertexUvs();
     if (nullptr != triangleVertexUvs) {
         layerElementUv.addProperty((int32_t)0);
         layerElementUv.addPropertyNode("Version", (int32_t)101);
@@ -2415,7 +2416,7 @@ FbxFileWriter::FbxFileWriter(Outcome &outcome,
         std::vector<std::pair<std::vector<int32_t>, std::vector<double>>> bindPerBone(resultRigBones->size());
         if (resultRigWeights && !resultRigWeights->empty()) {
             for (const auto &item: *resultRigWeights) {
-                for (int i = 0; i < 4; ++i) {
+                for (int i = 0; i < MAX_WEIGHT_NUM; ++i) {
                     const auto &boneIndex = item.second.boneIndices[i];
                     Q_ASSERT(boneIndex < bindPerBone.size());
                     if (0 == boneIndex)
@@ -2602,8 +2603,8 @@ FbxFileWriter::FbxFileWriter(Outcome &outcome,
                 deformer.addChild(userData);
                 deformer.addPropertyNode("Indexes", bindPerBone[i].first);
                 deformer.addPropertyNode("Weights", bindPerBone[i].second);
-                deformer.addPropertyNode("Transform", matrixToVector(jointNode.transformMatrix.inverted()));
-                deformer.addPropertyNode("TransformLink", matrixToVector(jointNode.transformMatrix));
+                deformer.addPropertyNode("Transform", matrixToVector(jointNode.inverseBindMatrix));
+                deformer.addPropertyNode("TransformLink", matrixToVector(jointNode.bindMatrix));
                 deformer.addPropertyNode("TransformAssociateModel", m_identityMatrix);
                 deformer.addChild(FBXNode());
             }
@@ -2774,7 +2775,7 @@ FbxFileWriter::FbxFileWriter(Outcome &outcome,
             const auto &boneNode = boneNodes[i];
             FBXNode poseNode("PoseNode");
             poseNode.addPropertyNode("Node", (int64_t)limbNodeIds[1 + i]);
-            poseNode.addPropertyNode("Matrix", matrixToVector(boneNode.transformMatrix));
+            poseNode.addPropertyNode("Matrix", matrixToVector(boneNode.bindMatrix));
             poseNode.addChild(FBXNode());
             pose.addChild(poseNode);
         }

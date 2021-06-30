@@ -1,6 +1,8 @@
 #include "preferences.h"
 #include "util.h"
 
+#define MAX_RECENT_FILES            7
+
 Preferences &Preferences::instance()
 {
     static Preferences *s_preferences = nullptr;
@@ -18,6 +20,8 @@ void Preferences::loadDefault()
     m_toonShading = false;
     m_toonLine = ToonLine::WithoutLine;
     m_textureSize = 1024;
+    m_scriptEnabled = false;
+    m_interpolationEnabled = true;
 }
 
 Preferences::Preferences()
@@ -57,6 +61,20 @@ Preferences::Preferences()
         if (!value.isEmpty())
             m_textureSize = value.toInt();
     }
+    {
+        QString value = m_settings.value("scriptEnabled").toString();
+        if (value.isEmpty())
+            m_scriptEnabled = false;
+        else
+            m_scriptEnabled = isTrueValueString(value);
+    }
+    {
+        QString value = m_settings.value("interpolationEnabled").toString();
+        if (value.isEmpty())
+            m_interpolationEnabled = true;
+        else
+            m_interpolationEnabled = isTrueValueString(value);
+    }
 }
 
 CombineMode Preferences::componentCombineMode() const
@@ -72,6 +90,16 @@ const QColor &Preferences::partColor() const
 bool Preferences::flatShading() const
 {
     return m_flatShading;
+}
+
+bool Preferences::scriptEnabled() const
+{
+    return m_scriptEnabled;
+}
+
+bool Preferences::interpolationEnabled() const
+{
+    return m_interpolationEnabled;
 }
 
 bool Preferences::toonShading() const
@@ -116,6 +144,24 @@ void Preferences::setFlatShading(bool flatShading)
     emit flatShadingChanged();
 }
 
+void Preferences::setScriptEnabled(bool enabled)
+{
+    if (m_scriptEnabled == enabled)
+        return;
+    m_scriptEnabled = enabled;
+    m_settings.setValue("scriptEnabled", enabled ? "true" : "false");
+    emit scriptEnabledChanged();
+}
+
+void Preferences::setInterpolationEnabled(bool enabled)
+{
+    if (m_interpolationEnabled == enabled)
+        return;
+    m_interpolationEnabled = enabled;
+    m_settings.setValue("interpolationEnabled", enabled ? "true" : "false");
+    emit interpolationEnabledChanged();
+}
+
 void Preferences::setToonShading(bool toonShading)
 {
     if (m_toonShading == toonShading)
@@ -153,9 +199,34 @@ void Preferences::setDocumentWindowSize(const QSize& size)
     m_settings.setValue("documentWindowSize", size);
 }
 
+QStringList Preferences::recentFileList() const
+{
+    return m_settings.value("recentFileList").toStringList();
+}
+
+int Preferences::maxRecentFiles() const
+{
+    return MAX_RECENT_FILES;
+}
+
+void Preferences::setCurrentFile(const QString &fileName)
+{
+    QStringList files = m_settings.value("recentFileList").toStringList();
+    
+    files.removeAll(fileName);
+    files.prepend(fileName);
+    while (files.size() > MAX_RECENT_FILES)
+        files.removeLast();
+    
+    m_settings.setValue("recentFileList", files);
+}
+
 void Preferences::reset()
 {
+    auto files = m_settings.value("recentFileList").toStringList();
     m_settings.clear();
+    m_settings.setValue("recentFileList", files);
+    
     loadDefault();
     emit componentCombineModeChanged();
     emit partColorChanged();
@@ -163,4 +234,6 @@ void Preferences::reset()
     emit toonShadingChanged();
     emit toonLineChanged();
     emit textureSizeChanged();
+    emit scriptEnabledChanged();
+    emit interpolationEnabledChanged();
 }

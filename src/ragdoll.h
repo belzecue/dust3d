@@ -1,66 +1,91 @@
 #ifndef DUST3D_RAGDOLL_H
 #define DUST3D_RAGDOLL_H
-#include <QObject>
-#include <BulletDynamics/Dynamics/btDynamicsWorld.h>
-#include <BulletDynamics/Dynamics/btRigidBody.h>
-#include <BulletCollision/CollisionShapes/btCollisionShape.h>
-#include <BulletDynamics/ConstraintSolver/btTypedConstraint.h>
-#include <LinearMath/btVector3.h>
-#include <LinearMath/btScalar.h>
-#include <BulletCollision/CollisionDispatch/btDefaultCollisionConfiguration.h>
-#include <BulletCollision/BroadphaseCollision/btDbvtBroadphase.h>
-#include <BulletDynamics/ConstraintSolver/btSequentialImpulseConstraintSolver.h>
-#include <BulletDynamics/Dynamics/btDiscreteDynamicsWorld.h>
-#include <BulletCollision/CollisionShapes/btBoxShape.h>
-#include <QString>
-#include <map>
-#include <tuple>
-#include <QStringList>
-#include <QColor>
-#include "rigger.h"
-#include "jointnodetree.h"
+#include <vector>
+#include <QVector3D>
+#include <unordered_map>
 
-class RagDoll : public QObject
+class Ragdoll
 {
-    Q_OBJECT
 public:
-    RagDoll(const std::vector<RiggerBone> *rigBones,
-        const JointNodeTree *initialJointNodeTree=nullptr);
-    ~RagDoll();
-    bool stepSimulation(float amount);
-    const JointNodeTree &getStepJointNodeTree();
-    const std::vector<std::tuple<QVector3D, QVector3D, float, float, QColor>> &getStepBonePositions();
+    struct Parameters
+    {
+        size_t iterations = 1;
+    };
+    
+    struct Chain
+    {
+        size_t from;
+        size_t to;
+        double restLength;
+    };
+    
+    struct VertexMotion
+    {
+        QVector3D position;
+        QVector3D lastPosition;
+        QVector3D force;
+        bool fixed = false;
+        double radius = 0.0;
+    };
+    
+    struct JointConstraint
+    {
+        size_t joint;
+        size_t first;
+        size_t second;
+        double minDegrees;
+        double maxDegrees;
+    };
 
+    Ragdoll(const std::vector<QVector3D> *vertices,
+            const std::vector<std::pair<size_t, size_t>> *links) :
+        m_vertices(vertices),
+        m_links(links)
+    {
+    }
+    
+    void addJointConstraint(size_t joint, 
+            size_t first, 
+            size_t second, 
+            double minDegrees, 
+            double maxDegrees)
+    {
+        JointConstraint jointConstraint = {
+            joint, first, second, minDegrees, maxDegrees
+        };
+        m_jointConstraints.push_back(jointConstraint);
+    }
+    
+    void setExternalForce(const QVector3D &externalForce)
+    {
+        m_externalForce = externalForce;
+    }
+    
+    void start();
+    void simulate(double stepSize);
+    const VertexMotion &getVertexMotion(size_t vertexIndex);
+    void updateVertexPosition(size_t vertexIndex, const QVector3D &position);
+    void updateVertexRadius(size_t vertexIndex, double radius);
+    void fixVertexPosition(size_t vertexIndex);
+    
 private:
-    btDefaultCollisionConfiguration *m_collisionConfiguration = nullptr;
-    btCollisionDispatcher *m_collisionDispather = nullptr;
-    btDbvtBroadphase *m_broadphase = nullptr;
-    btSequentialImpulseConstraintSolver *m_constraintSolver = nullptr;
-    btDynamicsWorld *m_world = nullptr;
-    btCollisionShape *m_groundShape = nullptr;
-    btRigidBody *m_groundBody = nullptr;
-    float m_groundY = 0;
-    std::vector<std::pair<QVector3D, QVector3D>> m_boneInitialPositions;
+    Parameters m_parameters;
+    std::vector<Chain> m_chains;
+    const std::vector<QVector3D> *m_vertices = nullptr;
+    const std::vector<std::pair<size_t, size_t>> *m_links = nullptr;
+    std::vector<JointConstraint> m_jointConstraints;
+    std::unordered_map<size_t, VertexMotion> m_vertexMotions;
+    QVector3D m_externalForce;
+    double m_groundY = 0.0;
     
-    std::map<QString, btCollisionShape *> m_boneShapes;
-    std::map<QString, btRigidBody *> m_boneBodies;
-    std::vector<btTypedConstraint *> m_boneConstraints;
+    void initializeVertexMotions();
+    void prepareChains();
+    void updateVertexForces();
+    void applyConstraints();
+    void doVerletIntegration(double stepSize);
+    void applyBoundingConstraints(VertexMotion *vertexMotion);
     
-    std::map<QString, QVector3D> m_boneMiddleMap;
-    std::map<QString, float> m_boneLengthMap;
-    std::map<QString, float> m_boneRadiusMap;
-    
-    JointNodeTree m_jointNodeTree;
-    JointNodeTree m_stepJointNodeTree;
-    std::vector<RiggerBone> m_bones;
-    std::vector<std::tuple<QVector3D, QVector3D, float, float, QColor>> m_stepBonePositions;
-    
-    std::map<QString, int> m_boneNameToIndexMap;
-    std::map<QString, std::vector<QString>> m_chains;
- 
-    btRigidBody *createRigidBody(btScalar mass, const btTransform &startTransform, btCollisionShape *shape);
-    void createDynamicsWorld();
-    void addConstraint(const RiggerBone &child, const RiggerBone &parent, bool isBorrowedParent=false);
+    void outputChainsForDebug(const char *filename, const std::vector<Chain> &springs);
 };
 
 #endif

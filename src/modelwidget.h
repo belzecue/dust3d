@@ -42,6 +42,7 @@ public:
     }
     Model *fetchCurrentMesh();
     void updateMesh(Model *mesh);
+    void updateColorTexture(QImage *colorTextureImage);
     void setGraphicsFunctions(SkeletonGraphicsFunctions *graphicsFunctions);
     void toggleWireframe();
     bool isWireframeVisible();
@@ -55,7 +56,7 @@ public:
     void setMoveAndZoomByWindow(bool byWindow);
     void disableCullFace();
     void setMoveToPosition(const QVector3D &moveToPosition);
-    bool inputMousePressEventFromOtherWidget(QMouseEvent *event);
+    bool inputMousePressEventFromOtherWidget(QMouseEvent *event, bool notGraphics=false);
     bool inputMouseMoveEventFromOtherWidget(QMouseEvent *event);
     bool inputWheelEventFromOtherWidget(QWheelEvent *event);
     bool inputMouseReleaseEventFromOtherWidget(QMouseEvent *event);
@@ -64,6 +65,7 @@ public:
     void updateToonNormalAndDepthMaps(QImage *normalMap, QImage *depthMap);
     int widthInPixels();
     int heightInPixels();
+    void setNotGraphics(bool notGraphics);
 public slots:
     void setXRotation(int angle);
     void setYRotation(int angle);
@@ -90,14 +92,14 @@ public:
     const QVector3D &eyePosition();
     const QVector3D &moveToPosition();
 private:
-    int m_xRot;
-    int m_yRot;
-    int m_zRot;
-    ModelShaderProgram *m_program;
-    bool m_moveStarted;
-    bool m_moveEnabled;
-    bool m_zoomEnabled;
-    bool m_mousePickingEnabled;
+    int m_xRot = m_defaultXRotation;
+    int m_yRot = m_defaultYRotation;
+    int m_zRot = m_defaultZRotation;
+    ModelShaderProgram *m_program = nullptr;
+    bool m_moveStarted = false;
+    bool m_moveEnabled = true;
+    bool m_zoomEnabled = true;
+    bool m_mousePickingEnabled = false;
     QVector3D m_mousePickTargetPositionInModelSpace;
 private:
     QPoint m_lastPos;
@@ -119,6 +121,7 @@ private:
     QVector3D m_moveToPosition;
     bool m_moveAndZoomByWindow = true;
     bool m_enableCullFace = true;
+    bool m_notGraphics = false;
     std::pair<QVector3D, QVector3D> screenPositionToMouseRay(const QPoint &screenPosition);
     void updateProjectionMatrix();
 public:

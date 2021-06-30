@@ -2,8 +2,7 @@
 #include "skeletonikmover.h"
 #include "ccdikresolver.h"
 
-SkeletonIkMover::SkeletonIkMover() :
-    m_updateVersion(0)
+SkeletonIkMover::SkeletonIkMover()
 {
 }
 
@@ -43,13 +42,12 @@ void SkeletonIkMover::process()
 {
     resolve();
     
-    this->moveToThread(QGuiApplication::instance()->thread());
     emit finished();
 }
 
 void SkeletonIkMover::resolve()
 {
-    CCDIKSolver solver;
+    CcdIkSolver solver;
     for (auto i = 0u; i < m_ikNodes.size(); i++) {
         solver.addNodeInOrder(m_ikNodes[i].position);
     }

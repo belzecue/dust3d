@@ -1,6 +1,6 @@
 <a href="https://dust3d.org" target="_blank"><image src="https://dust3d.org/images/dust3d-logo-wide.png" width="320" height="102"></a>
 
-[![appveyor status](https://ci.appveyor.com/api/projects/status/github/huxingyi/dust3d?branch=master&svg=true)](https://ci.appveyor.com/project/huxingyi/dust3d) [![travis status](https://travis-ci.org/huxingyi/dust3d.svg?branch=master)](https://travis-ci.org/huxingyi/dust3d) [![readthedocs status](https://readthedocs.org/projects/dust3d/badge/?version=latest)](https://docs.dust3d.org/en/latest/?badge=latest) [![](https://img.shields.io/twitter/follow/jeremyhu2016.svg?label=%20%40follow&style=social)](https://twitter.com/jeremyhu2016) [![](https://img.shields.io/badge/mailing%20list%20-join-blue.svg)](https://www.freelists.org/list/dust3d) [![](https://img.shields.io/discourse/https/dust3d.discourse.group/status.svg)](https://dust3d.discourse.group/) [![](https://img.shields.io/github/downloads/huxingyi/dust3d/total.svg)](https://docs.dust3d.org/en/latest/install.html)
+[![appveyor status](https://ci.appveyor.com/api/projects/status/github/huxingyi/dust3d?branch=master&svg=true)](https://ci.appveyor.com/project/huxingyi/dust3d) [![travis status](https://travis-ci.org/huxingyi/dust3d.svg?branch=master)](https://travis-ci.org/huxingyi/dust3d) [![readthedocs status](https://readthedocs.org/projects/dust3d/badge/?version=latest)](https://docs.dust3d.org/en/latest/?badge=latest) [![](https://img.shields.io/twitter/follow/jeremyhu2016.svg?label=%20%40follow&style=social)](https://twitter.com/jeremyhu2016) [![](https://img.shields.io/badge/mailing%20list%20-join-blue.svg)](https://www.freelists.org/list/dust3d) [![](https://img.shields.io/github/downloads/huxingyi/dust3d/total.svg)](https://docs.dust3d.org/en/latest/install.html)
 
 
 Buy me a coffee for staying up late coding :-) [![](https://www.paypalobjects.com/en_US/i/btn/btn_donate_SM.gif)](https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=GHALWLWXYGCU6&item_name=Support+me+coding+in+my+spare+time&currency_code=AUD&source=url)  
@@ -66,17 +66,14 @@ External Media
 -------------
 <a href="https://www.youtube.com/watch?v=YBnEQk_5D70" target="_blank"><image src="https://raw.githubusercontent.com/huxingyi/dust3d/master/docs/images/dust3d-free-open-source-3d-modelling-application-video-thumbnail.png" width="480" height="270"></a>  
 
-- [Dust3D -- Free Open Source 3D Modelling Application](https://www.youtube.com/watch?v=YBnEQk_5D70) **gamefromscratch.com**  
-- [Dust3D -- Incredibly Unique, Easy and Free Open Source 3D Modeller](https://www.youtube.com/watch?v=MytN8t4guuM&feature=emb_logo) **gamefromscratch.com**  
+- [Dust3D -- Free Open Source 3D Modelling Application](https://www.youtube.com/watch?v=YBnEQk_5D70) **gamefromscratch**  
+- [Dust3D -- Incredibly Unique, Easy and Free Open Source 3D Modeller](https://www.youtube.com/watch?v=MytN8t4guuM&feature=emb_logo) **gamefromscratch**  
 - [EASILY MAKE 3D MODELS FROM SCRATCH! - WITH THIS FREE OPEN SOURCE TOOL](https://www.youtube.com/watch?v=6hf2yJ8CiW4&feature=youtu.be) **askNK**  
+- [fastest way to model 3d animals dust 3d](https://www.youtube.com/watch?v=AENQJWwn1HA&feature=youtu.be) **TopChannel1on1**  
 
 Contributing
 ---------------
 Any contributions are welcome including bugfixes, fixing typos, adding tests, proposing new features, and letting more people know about Dust3D.
-
-If you write or post about Dust3D online, please add your name in CONTRIBUTORS.
-
-If you've submitted any PRs with code changes, including the example code listed in the docs folder, please don’t forget to add your name to AUTHORS in your pull request.
 
 License
 -----------

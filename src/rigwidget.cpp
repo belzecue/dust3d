@@ -5,6 +5,7 @@
 #include "rigtype.h"
 #include "infolabel.h"
 #include "theme.h"
+#include "document.h"
 
 RigWidget::RigWidget(const Document *document, QWidget *parent) :
     QWidget(parent),
@@ -36,13 +37,16 @@ RigWidget::RigWidget(const Document *document, QWidget *parent) :
     m_rigWeightRenderWidget->setXRotation(0);
     m_rigWeightRenderWidget->setYRotation(0);
     m_rigWeightRenderWidget->setZRotation(0);
+    m_rigWeightRenderWidget->setEyePosition(QVector3D(0.0, 0.0, -2.0));
     m_rigWeightRenderWidget->toggleWireframe();
+    m_rigWeightRenderWidget->setNotGraphics(true);
     
     m_infoLabel = new InfoLabel;
     m_infoLabel->hide();
     
     QVBoxLayout *layout = new QVBoxLayout;
     layout->addLayout(formLayout);
+    layout->addSpacing(10);
     layout->addWidget(m_rigWeightRenderWidget);
     layout->addWidget(m_infoLabel);
     layout->addStretch();

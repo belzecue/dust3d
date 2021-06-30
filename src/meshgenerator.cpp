@@ -15,17 +15,13 @@
 #include "partbase.h"
 #include "imageforever.h"
 #include "triangulatefaces.h"
-#include "remesher.h"
-#include "polycount.h"
-#include "clothsimulator.h"
 #include "isotropicremesh.h"
-#include "projectfacestonodes.h"
 #include "document.h"
-#include "simulateclothmeshes.h"
 #include "meshstroketifier.h"
 #include "fileforever.h"
 #include "snapshotxml.h"
 #include "fixholes.h"
+#include "modeloffscreenrender.h"
 
 MeshGenerator::MeshGenerator(Snapshot *snapshot) :
     m_snapshot(snapshot)
@@ -34,11 +30,13 @@ MeshGenerator::MeshGenerator(Snapshot *snapshot) :
 
 MeshGenerator::~MeshGenerator()
 {
+    for (auto &it: m_partPreviewImages)
+        delete it.second;
     for (auto &it: m_partPreviewMeshes)
         delete it.second;
     delete m_resultMesh;
     delete m_snapshot;
-    delete m_outcome;
+    delete m_object;
     delete m_cutFaceTransforms;
     delete m_nodesCutFaces;
 }
@@ -72,16 +70,28 @@ Model *MeshGenerator::takePartPreviewMesh(const QUuid &partId)
     return resultMesh;
 }
 
+QImage *MeshGenerator::takePartPreviewImage(const QUuid &partId)
+{
+    QImage *image = m_partPreviewImages[partId];
+    m_partPreviewImages[partId] = nullptr;
+    return image;
+}
+
 const std::set<QUuid> &MeshGenerator::generatedPreviewPartIds()
 {
     return m_generatedPreviewPartIds;
 }
 
-Outcome *MeshGenerator::takeOutcome()
+const std::set<QUuid> &MeshGenerator::generatedPreviewImagePartIds()
 {
-    Outcome *outcome = m_outcome;
-    m_outcome = nullptr;
-    return outcome;
+    return m_generatedPreviewImagePartIds;
+}
+
+Object *MeshGenerator::takeObject()
+{
+    Object *object = m_object;
+    m_object = nullptr;
+    return object;
 }
 
 std::map<QUuid, StrokeMeshBuilder::CutFaceTransform> *MeshGenerator::takeCutFaceTransforms()
@@ -121,7 +131,7 @@ bool MeshGenerator::checkIsPartDirty(const QString &partIdString)
         qDebug() << "Find part failed:" << partIdString;
         return false;
     }
-    return isTrueValueString(valueOfKeyInMapOrEmpty(findPart->second, "dirty"));
+    return isTrueValueString(valueOfKeyInMapOrEmpty(findPart->second, "__dirty"));
 }
 
 bool MeshGenerator::checkIsPartDependencyDirty(const QString &partIdString)
@@ -167,7 +177,7 @@ bool MeshGenerator::checkIsComponentDirty(const QString &componentIdString)
         component = &findComponent->second;
     }
     
-    if (isTrueValueString(valueOfKeyInMapOrEmpty(*component, "dirty"))) {
+    if (isTrueValueString(valueOfKeyInMapOrEmpty(*component, "__dirty"))) {
         isDirty = true;
     }
     
@@ -343,11 +353,15 @@ MeshCombiner::Mesh *MeshGenerator::combinePartMesh(const QString &partIdString, 
     *retryable = true;
     
     bool isDisabled = isTrueValueString(valueOfKeyInMapOrEmpty(part, "disabled"));
-    bool xMirrored = isTrueValueString(valueOfKeyInMapOrEmpty(part, "xMirrored"));
+    //bool xMirrored = isTrueValueString(valueOfKeyInMapOrEmpty(part, "xMirrored"));
+    //bool _xFlip = isTrueValueString(valueOfKeyInMapOrEmpty(part, "_xFlip"));
+    QString __mirroredByPartId = valueOfKeyInMapOrEmpty(part, "__mirroredByPartId");
+    QString __mirrorFromPartId = valueOfKeyInMapOrEmpty(part, "__mirrorFromPartId");
     bool subdived = isTrueValueString(valueOfKeyInMapOrEmpty(part, "subdived"));
     bool rounded = isTrueValueString(valueOfKeyInMapOrEmpty(part, "rounded"));
     bool chamfered = isTrueValueString(valueOfKeyInMapOrEmpty(part, "chamfered"));
     bool countershaded = isTrueValueString(valueOfKeyInMapOrEmpty(part, "countershaded"));
+    bool smooth = isTrueValueString(valueOfKeyInMapOrEmpty(part, "smooth"));
     QString colorString = valueOfKeyInMapOrEmpty(part, "color");
     QColor partColor = colorString.isEmpty() ? m_defaultPartColor : QColor(colorString);
     float deformThickness = 1.0;
@@ -356,6 +370,8 @@ MeshCombiner::Mesh *MeshGenerator::combinePartMesh(const QString &partIdString, 
     float hollowThickness = 0.0;
     auto target = PartTargetFromString(valueOfKeyInMapOrEmpty(part, "target").toUtf8().constData());
     auto base = PartBaseFromString(valueOfKeyInMapOrEmpty(part, "base").toUtf8().constData());
+    
+    QString searchPartIdString = __mirrorFromPartId.isEmpty() ? partIdString : __mirrorFromPartId;
 
     QString cutFaceString = valueOfKeyInMapOrEmpty(part, "cutFace");
     std::vector<QVector2D> cutTemplate;
@@ -382,6 +398,8 @@ MeshCombiner::Mesh *MeshGenerator::combinePartMesh(const QString &partIdString, 
     if (!widthString.isEmpty()) {
         deformWidth = widthString.toFloat();
     }
+    
+    bool deformUnified = isTrueValueString(valueOfKeyInMapOrEmpty(part, "deformUnified"));
     
     QImage deformImageStruct;
     const QImage *deformImage = nullptr;
@@ -410,22 +428,30 @@ MeshCombiner::Mesh *MeshGenerator::combinePartMesh(const QString &partIdString, 
     if (!colorSolubilityString.isEmpty())
         colorSolubility = colorSolubilityString.toFloat();
     
+    float metalness = 0;
+    QString metalnessString = valueOfKeyInMapOrEmpty(part, "metallic");
+    if (!metalnessString.isEmpty())
+        metalness = metalnessString.toFloat();
+    
+    float roughness = 1.0;
+    QString roughnessString = valueOfKeyInMapOrEmpty(part, "roughness");
+    if (!roughnessString.isEmpty())
+        roughness = roughnessString.toFloat();
+    
     QUuid fillMeshFileId;
     QString fillMeshString = valueOfKeyInMapOrEmpty(part, "fillMesh");
     if (!fillMeshString.isEmpty()) {
         fillMeshFileId = QUuid(fillMeshString);
         if (!fillMeshFileId.isNull()) {
             *retryable = false;
-            xMirrored = false;
+            //xMirrored = false;
         }
     }
     
     auto &partCache = m_cacheContext->parts[partIdString];
-    partCache.outcomeNodes.clear();
-    partCache.outcomeEdges.clear();
-    partCache.outcomeNodeVertices.clear();
-    partCache.outcomePaintMap.clear();
-    partCache.outcomePaintMap.partId = partId;
+    partCache.objectNodes.clear();
+    partCache.objectEdges.clear();
+    partCache.objectNodeVertices.clear();
     partCache.vertices.clear();
     partCache.faces.clear();
     partCache.previewTriangles.clear();
@@ -444,7 +470,7 @@ MeshCombiner::Mesh *MeshGenerator::combinePartMesh(const QString &partIdString, 
         QString cutFace;
     };
     std::map<QString, NodeInfo> nodeInfos;
-    for (const auto &nodeIdString: m_partNodeIds[partIdString]) {
+    for (const auto &nodeIdString: m_partNodeIds[searchPartIdString]) {
         auto findNode = m_snapshot->nodes.find(nodeIdString);
         if (findNode == m_snapshot->nodes.end()) {
             qDebug() << "Find node failed:" << nodeIdString;
@@ -483,7 +509,7 @@ MeshCombiner::Mesh *MeshGenerator::combinePartMesh(const QString &partIdString, 
     }
     
     std::set<std::pair<QString, QString>> edges;
-    for (const auto &edgeIdString: m_partEdgeIds[partIdString]) {
+    for (const auto &edgeIdString: m_partEdgeIds[searchPartIdString]) {
         auto findEdge = m_snapshot->edges.find(edgeIdString);
         if (findEdge == m_snapshot->edges.end()) {
             qDebug() << "Find edge failed:" << edgeIdString;
@@ -514,51 +540,60 @@ MeshCombiner::Mesh *MeshGenerator::combinePartMesh(const QString &partIdString, 
     std::map<int, QString> nodeIndexToIdStringMap;
     StrokeModifier *strokeModifier = nullptr;
     
-    QString mirroredPartIdString;
-    QUuid mirroredPartId;
-    if (xMirrored) {
-        mirroredPartId = QUuid().createUuid();
-        mirroredPartIdString = mirroredPartId.toString();
-        m_cacheContext->partMirrorIdMap[mirroredPartIdString] = partIdString;
-    }
+    //QString mirroredPartIdString;
+    //QUuid mirroredPartId;
+    //if (xMirrored) {
+    //    mirroredPartId = QUuid().createUuid();
+    //    mirroredPartIdString = mirroredPartId.toString();
+    //    m_cacheContext->partMirrorIdMap[mirroredPartIdString] = partIdString;
+    //}
     
     auto addNodeToPartCache = [&](const QString &nodeIdString, const NodeInfo &nodeInfo) {
-        OutcomeNode outcomeNode;
-        outcomeNode.partId = QUuid(partIdString);
-        outcomeNode.nodeId = QUuid(nodeIdString);
-        outcomeNode.origin = nodeInfo.position;
-        outcomeNode.radius = nodeInfo.radius;
-        outcomeNode.color = partColor;
-        outcomeNode.materialId = materialId;
-        outcomeNode.countershaded = countershaded;
-        outcomeNode.colorSolubility = colorSolubility;
-        outcomeNode.boneMark = nodeInfo.boneMark;
-        outcomeNode.mirroredByPartId = mirroredPartId;
-        outcomeNode.joined = partCache.joined;
-        partCache.outcomeNodes.push_back(outcomeNode);
-        if (xMirrored) {
-            outcomeNode.partId = mirroredPartId;
-            outcomeNode.mirrorFromPartId = QUuid(partId);
-            outcomeNode.mirroredByPartId = QUuid();
-            outcomeNode.origin.setX(-nodeInfo.position.x());
-            partCache.outcomeNodes.push_back(outcomeNode);
+        ObjectNode objectNode;
+        objectNode.partId = QUuid(partIdString);
+        objectNode.nodeId = QUuid(nodeIdString);
+        objectNode.origin = nodeInfo.position;
+        objectNode.radius = nodeInfo.radius;
+        objectNode.color = partColor;
+        objectNode.materialId = materialId;
+        objectNode.countershaded = countershaded;
+        objectNode.colorSolubility = colorSolubility;
+        objectNode.metalness = metalness;
+        objectNode.roughness = roughness;
+        objectNode.boneMark = nodeInfo.boneMark;
+        if (!__mirroredByPartId.isEmpty())
+            objectNode.mirroredByPartId = QUuid(__mirroredByPartId);
+        if (!__mirrorFromPartId.isEmpty()) {
+            objectNode.mirrorFromPartId = QUuid(__mirrorFromPartId);
+            objectNode.origin.setX(-nodeInfo.position.x());
         }
+        objectNode.joined = partCache.joined;
+        partCache.objectNodes.push_back(objectNode);
+        //if (xMirrored) {
+        //    objectNode.partId = mirroredPartId;
+        //    objectNode.mirrorFromPartId = QUuid(partId);
+        //    objectNode.mirroredByPartId = QUuid();
+        //    objectNode.origin.setX(-nodeInfo.position.x());
+        //    partCache.objectNodes.push_back(objectNode);
+        //}
     };
     auto addEdgeToPartCache = [&](const QString &firstNodeIdString, const QString &secondNodeIdString) {
-        partCache.outcomeEdges.push_back({
+        partCache.objectEdges.push_back({
             {QUuid(partIdString), QUuid(firstNodeIdString)},
             {QUuid(partIdString), QUuid(secondNodeIdString)}
         });
-        if (xMirrored) {
-            partCache.outcomeEdges.push_back({
-                {mirroredPartId, QUuid(firstNodeIdString)},
-                {mirroredPartId, QUuid(secondNodeIdString)}
-            });
-        }
+        //if (xMirrored) {
+        //    partCache.objectEdges.push_back({
+        //        {mirroredPartId, QUuid(firstNodeIdString)},
+        //        {mirroredPartId, QUuid(secondNodeIdString)}
+        //    });
+        //}
     };
     
     strokeModifier = new StrokeModifier;
     
+    if (smooth)
+        strokeModifier->enableSmooth();
     if (addIntermediateNodes)
         strokeModifier->enableIntermediateAddition();
     
@@ -613,6 +648,7 @@ MeshCombiner::Mesh *MeshGenerator::combinePartMesh(const QString &partIdString, 
     strokeMeshBuilder->setDeformThickness(deformThickness);
     strokeMeshBuilder->setDeformWidth(deformWidth);
     strokeMeshBuilder->setDeformMapScale(deformMapScale);
+    strokeMeshBuilder->setDeformUnified(deformUnified);
     strokeMeshBuilder->setHollowThickness(hollowThickness);
     if (nullptr != deformImage)
         strokeMeshBuilder->setDeformMapImage(deformImage);
@@ -645,47 +681,36 @@ MeshCombiner::Mesh *MeshGenerator::combinePartMesh(const QString &partIdString, 
             const QString &toNodeIdString = edgeIt.second;
             addEdgeToPartCache(fromNodeIdString, toNodeIdString);
         }
-        
-        for (const auto &node: strokeModifier->nodes()) {
-            const auto &originNodeIdString = nodeIndexToIdStringMap[node.originNodeIndex];
-            
-            OutcomePaintNode paintNode;
-            paintNode.originNodeIndex = node.originNodeIndex;
-            paintNode.originNodeId = QUuid(originNodeIdString);
-            paintNode.radius = node.radius;
-            paintNode.origin = node.position;
-            
-            partCache.outcomePaintMap.paintNodes.push_back(paintNode);
-        }
 
         buildSucceed = strokeMeshBuilder->build();
         
         partCache.vertices = strokeMeshBuilder->generatedVertices();
         partCache.faces = strokeMeshBuilder->generatedFaces();
+        if (!__mirrorFromPartId.isEmpty()) {
+            for (auto &it: partCache.vertices)
+                it.setX(-it.x());
+            for (auto &it: partCache.faces)
+                std::reverse(it.begin(), it.end());
+        }
         sourceNodeIndices = strokeMeshBuilder->generatedVerticesSourceNodeIndices();
         for (size_t i = 0; i < partCache.vertices.size(); ++i) {
             const auto &position = partCache.vertices[i];
             const auto &source = strokeMeshBuilder->generatedVerticesSourceNodeIndices()[i];
             size_t nodeIndex = strokeModifier->nodes()[source].originNodeIndex;
             const auto &nodeIdString = nodeIndexToIdStringMap[nodeIndex];
-            partCache.outcomeNodeVertices.push_back({position, {partIdString, nodeIdString}});
-            
-            auto &paintNode = partCache.outcomePaintMap.paintNodes[source];
-            paintNode.vertices.push_back(position);
-        }
-        
-        for (size_t i = 0; i < partCache.outcomePaintMap.paintNodes.size(); ++i) {
-            auto &paintNode = partCache.outcomePaintMap.paintNodes[i];
-            paintNode.baseNormal = strokeMeshBuilder->nodeBaseNormal(i);
-            paintNode.direction = strokeMeshBuilder->nodeTraverseDirection(i);
-            paintNode.order = strokeMeshBuilder->nodeTraverseOrder(i);
-            
-            partCache.outcomeNodes[paintNode.originNodeIndex].direction = paintNode.direction;
+            partCache.objectNodeVertices.push_back({position, {partIdString, nodeIdString}});
         }
     } else {
-        if (strokeMeshBuilder->buildBaseNormalsOnly())
+        if (strokeMeshBuilder->buildBaseNormalsOnly()) {
             buildSucceed = fillPartWithMesh(partCache, fillMeshFileId, 
                 deformThickness, deformWidth, cutRotation, strokeMeshBuilder);
+            if (!__mirrorFromPartId.isEmpty()) {
+                for (auto &it: partCache.vertices)
+                    it.setX(-it.x());
+                for (auto &it: partCache.faces)
+                    std::reverse(it.begin(), it.end());
+            }
+        }
     }
     
     delete strokeMeshBuilder;
@@ -696,45 +721,7 @@ MeshCombiner::Mesh *MeshGenerator::combinePartMesh(const QString &partIdString, 
     
     if (buildSucceed) {
         mesh = new MeshCombiner::Mesh(partCache.vertices, partCache.faces, false);
-        if (!mesh->isNull()) {
-            if (xMirrored) {
-                std::vector<QVector3D> xMirroredVertices;
-                std::vector<std::vector<size_t>> xMirroredFaces;
-                makeXmirror(partCache.vertices, partCache.faces, &xMirroredVertices, &xMirroredFaces);
-                for (size_t i = 0; i < xMirroredVertices.size(); ++i) {
-                    const auto &position = xMirroredVertices[i];
-                    size_t nodeIndex = 0;
-                    const auto &source = sourceNodeIndices[i];
-                    nodeIndex = strokeModifier->nodes()[source].originNodeIndex;
-                    const auto &nodeIdString = nodeIndexToIdStringMap[nodeIndex];
-                    partCache.outcomeNodeVertices.push_back({position, {mirroredPartIdString, nodeIdString}});
-                }
-                size_t xMirrorStart = partCache.vertices.size();
-                for (const auto &vertex: xMirroredVertices)
-                    partCache.vertices.push_back(vertex);
-                for (const auto &face: xMirroredFaces) {
-                    std::vector<size_t> newFace = face;
-                    for (auto &it: newFace)
-                        it += xMirrorStart;
-                    partCache.faces.push_back(newFace);
-                }
-                MeshCombiner::Mesh *newMesh = nullptr;
-                MeshCombiner::Mesh *xMirroredMesh = new MeshCombiner::Mesh(xMirroredVertices, xMirroredFaces, false);
-                if (!xMirroredMesh->isNull()) {
-                    newMesh = combineTwoMeshes(*mesh,
-                        *xMirroredMesh, MeshCombiner::Method::Union);
-                }
-                delete xMirroredMesh;
-                if (newMesh && !newMesh->isNull()) {
-                    delete mesh;
-                    mesh = newMesh;
-                } else {
-                    hasMeshError = true;
-                    qDebug() << "Xmirrored mesh generate failed";
-                    delete newMesh;
-                }
-            }
-        } else {
+        if (mesh->isNull()) {
             hasMeshError = true;
             qDebug() << "Mesh built is uncombinable";
         }
@@ -742,10 +729,6 @@ MeshCombiner::Mesh *MeshGenerator::combinePartMesh(const QString &partIdString, 
         hasMeshError = true;
         qDebug() << "Mesh build failed";
     }
-    
-    delete m_partPreviewMeshes[partId];
-    m_partPreviewMeshes[partId] = nullptr;
-    m_generatedPreviewPartIds.insert(partId);
     
     std::vector<QVector3D> partPreviewVertices;
     QColor partPreviewColor = partColor;
@@ -781,12 +764,30 @@ MeshCombiner::Mesh *MeshGenerator::combinePartMesh(const QString &partIdString, 
         partPreviewTriangleNormals,
         &partPreviewTriangleVertexNormals);
     if (!partCache.previewTriangles.empty()) {
+        if (PartTarget::CutFace == target) {
+            std::vector<QVector2D> cutTemplate;
+            cutFaceStringToCutTemplate(partIdString, cutTemplate);
+            m_partPreviewImages[partId] = buildCutFaceTemplatePreviewImage(cutTemplate);
+            m_generatedPreviewImagePartIds.insert(partId);
+        } else {
+            m_partPreviewMeshes[partId] = new Model(partPreviewVertices,
+                partCache.previewTriangles,
+                partPreviewTriangleVertexNormals,
+                partPreviewColor,
+                metalness,
+                roughness);
+            m_generatedPreviewPartIds.insert(partId);
+        }
+        /*
         if (target == PartTarget::CutFace)
             partPreviewColor = Theme::red;
         m_partPreviewMeshes[partId] = new Model(partPreviewVertices,
             partCache.previewTriangles,
             partPreviewTriangleVertexNormals,
-            partPreviewColor);
+            partPreviewColor,
+            metalness,
+            roughness);
+        */
     }
     
     delete strokeModifier;
@@ -835,8 +836,8 @@ bool MeshGenerator::fillPartWithMesh(GeneratedPart &partCache,
     meshGenerator->setGeneratedCacheContext(fillMeshCacheContext);
     meshGenerator->generate();
     fillIsSucessful = meshGenerator->isSuccessful();
-    Outcome *outcome = meshGenerator->takeOutcome();
-    if (nullptr != outcome) {
+    Object *object = meshGenerator->takeObject();
+    if (nullptr != object) {
         MeshStroketifier stroketifier;
         std::vector<MeshStroketifier::Node> strokeNodes;
         for (const auto &nodeIndex: strokeMeshBuilder->nodeIndices()) {
@@ -849,36 +850,36 @@ bool MeshGenerator::fillPartWithMesh(GeneratedPart &partCache,
         stroketifier.setCutRotation(cutRotation);
         stroketifier.setDeformWidth(deformWidth);
         stroketifier.setDeformThickness(deformThickness);
-        if (stroketifier.prepare(strokeNodes, outcome->vertices)) {
-            stroketifier.stroketify(&outcome->vertices);
-            std::vector<MeshStroketifier::Node> agentNodes(outcome->nodes.size());
-            for (size_t i = 0; i < outcome->nodes.size(); ++i) {
+        if (stroketifier.prepare(strokeNodes, object->vertices)) {
+            stroketifier.stroketify(&object->vertices);
+            std::vector<MeshStroketifier::Node> agentNodes(object->nodes.size());
+            for (size_t i = 0; i < object->nodes.size(); ++i) {
                 auto &dest = agentNodes[i];
-                const auto &src = outcome->nodes[i];
+                const auto &src = object->nodes[i];
                 dest.position = src.origin;
                 dest.radius = src.radius;
             }
             stroketifier.stroketify(&agentNodes);
-            for (size_t i = 0; i < outcome->nodes.size(); ++i) {
+            for (size_t i = 0; i < object->nodes.size(); ++i) {
                 const auto &src = agentNodes[i];
-                auto &dest = outcome->nodes[i];
+                auto &dest = object->nodes[i];
                 dest.origin = src.position;
                 dest.radius = src.radius;
             }
         }
-        partCache.outcomeNodes.insert(partCache.outcomeNodes.end(), outcome->nodes.begin(), outcome->nodes.end());
-        partCache.outcomeEdges.insert(partCache.outcomeEdges.end(), outcome->edges.begin(), outcome->edges.end());
-        partCache.vertices.insert(partCache.vertices.end(), outcome->vertices.begin(), outcome->vertices.end());
+        partCache.objectNodes.insert(partCache.objectNodes.end(), object->nodes.begin(), object->nodes.end());
+        partCache.objectEdges.insert(partCache.objectEdges.end(), object->edges.begin(), object->edges.end());
+        partCache.vertices.insert(partCache.vertices.end(), object->vertices.begin(), object->vertices.end());
         if (!strokeNodes.empty()) {
             for (auto &it: partCache.vertices)
                 it += strokeNodes.front().position;
         }
-        for (size_t i = 0; i < outcome->vertexSourceNodes.size(); ++i)
-            partCache.outcomeNodeVertices.push_back({partCache.vertices[i], outcome->vertexSourceNodes[i]});
-        partCache.faces.insert(partCache.faces.end(), outcome->triangleAndQuads.begin(), outcome->triangleAndQuads.end());
+        for (size_t i = 0; i < object->vertexSourceNodes.size(); ++i)
+            partCache.objectNodeVertices.push_back({partCache.vertices[i], object->vertexSourceNodes[i]});
+        partCache.faces.insert(partCache.faces.end(), object->triangleAndQuads.begin(), object->triangleAndQuads.end());
         fillIsSucessful = true;
     }
-    delete outcome;
+    delete object;
     delete meshGenerator;
     delete fillMeshCacheContext;
 
@@ -907,33 +908,8 @@ CombineMode MeshGenerator::componentCombineMode(const std::map<QString, QString>
     if (combineMode == CombineMode::Normal) {
         if (isTrueValueString(valueOfKeyInMapOrEmpty(*component, "inverse")))
             combineMode = CombineMode::Inversion;
-        //if (componentRemeshed(component))
-        //    combineMode = CombineMode::Uncombined;
-        if (combineMode == CombineMode::Normal) {
-            if (ComponentLayer::Body != ComponentLayerFromString(valueOfKeyInMapOrEmpty(*component, "layer").toUtf8().constData())) {
-                combineMode = CombineMode::Uncombined;
-            }
-        }
     }
     return combineMode;
-}
-
-bool MeshGenerator::componentRemeshed(const std::map<QString, QString> *component, float *polyCountValue)
-{
-    if (nullptr == component)
-        return false;
-    bool isCloth = false;
-    if (ComponentLayer::Cloth == ComponentLayerFromString(valueOfKeyInMapOrEmpty(*component, "layer").toUtf8().constData())) {
-        if (nullptr != polyCountValue)
-            *polyCountValue = PolyCountToValue(PolyCount::VeryHighPoly);
-        isCloth = true;
-    }
-    auto polyCount = PolyCountFromString(valueOfKeyInMapOrEmpty(*component, "polyCount").toUtf8().constData());
-    if (nullptr != polyCountValue)
-        *polyCountValue = PolyCountToValue(polyCount);
-    if (isCloth)
-        return true;
-    return polyCount != PolyCount::Original;
 }
 
 QString MeshGenerator::componentColorName(const std::map<QString, QString> *component)
@@ -959,47 +935,6 @@ QString MeshGenerator::componentColorName(const std::map<QString, QString> *comp
         return colorName;
     }
     return QString();
-}
-
-ComponentLayer MeshGenerator::componentLayer(const std::map<QString, QString> *component)
-{
-    if (nullptr == component)
-        return ComponentLayer::Body;
-    return ComponentLayerFromString(valueOfKeyInMapOrEmpty(*component, "layer").toUtf8().constData());
-}
-
-float MeshGenerator::componentClothStiffness(const std::map<QString, QString> *component)
-{
-    if (nullptr == component)
-        return Component::defaultClothStiffness;
-    auto findClothStiffness = component->find("clothStiffness");
-    if (findClothStiffness == component->end())
-        return Component::defaultClothStiffness;
-    return findClothStiffness->second.toFloat();
-}
-
-size_t MeshGenerator::componentClothIteration(const std::map<QString, QString> *component)
-{
-    if (nullptr == component)
-        return Component::defaultClothIteration;
-    auto findClothIteration = component->find("clothIteration");
-    if (findClothIteration == component->end())
-        return Component::defaultClothIteration;
-    return findClothIteration->second.toUInt();
-}
-
-ClothForce MeshGenerator::componentClothForce(const std::map<QString, QString> *component)
-{
-    if (nullptr == component)
-        return ClothForce::Gravitational;
-    return ClothForceFromString(valueOfKeyInMapOrEmpty(*component, "clothForce").toUtf8().constData());
-}
-
-float MeshGenerator::componentClothOffset(const std::map<QString, QString> *component)
-{
-    if (nullptr == component)
-        return 0.0f;
-    return valueOfKeyInMapOrEmpty(*component, "clothOffset").toFloat();
 }
 
 MeshCombiner::Mesh *MeshGenerator::combineComponentMesh(const QString &componentIdString, CombineMode *combineMode)
@@ -1031,10 +966,9 @@ MeshCombiner::Mesh *MeshGenerator::combineComponentMesh(const QString &component
     
     componentCache.sharedQuadEdges.clear();
     componentCache.noneSeamVertices.clear();
-    componentCache.outcomeNodes.clear();
-    componentCache.outcomeEdges.clear();
-    componentCache.outcomeNodeVertices.clear();
-    componentCache.outcomePaintMaps.clear();
+    componentCache.objectNodes.clear();
+    componentCache.objectEdges.clear();
+    componentCache.objectNodeVertices.clear();
     componentCache.releaseMeshes();
     
     QString linkDataType = valueOfKeyInMapOrEmpty(*component, "linkDataType");
@@ -1042,11 +976,11 @@ MeshCombiner::Mesh *MeshGenerator::combineComponentMesh(const QString &component
         QString partIdString = valueOfKeyInMapOrEmpty(*component, "linkData");
         bool hasError = false;
         bool retryable = true;
-        mesh = combinePartMesh(partIdString, &hasError, &retryable);
+        mesh = combinePartMesh(partIdString, &hasError, &retryable, m_interpolationEnabled);
         if (hasError) {
             delete mesh;
             mesh = nullptr;
-            if (retryable) {
+            if (retryable && m_interpolationEnabled) {
                 hasError = false;
                 qDebug() << "Try combine part again without adding intermediate nodes";
                 mesh = combinePartMesh(partIdString, &hasError, &retryable, false);
@@ -1060,13 +994,12 @@ MeshCombiner::Mesh *MeshGenerator::combineComponentMesh(const QString &component
         for (const auto &vertex: partCache.vertices)
             componentCache.noneSeamVertices.insert(vertex);
         collectSharedQuadEdges(partCache.vertices, partCache.faces, &componentCache.sharedQuadEdges);
-        for (const auto &it: partCache.outcomeNodes)
-            componentCache.outcomeNodes.push_back(it);
-        for (const auto &it: partCache.outcomeEdges)
-            componentCache.outcomeEdges.push_back(it);
-        for (const auto &it: partCache.outcomeNodeVertices)
-            componentCache.outcomeNodeVertices.push_back(it);
-        componentCache.outcomePaintMaps.push_back(partCache.outcomePaintMap);
+        for (const auto &it: partCache.objectNodes)
+            componentCache.objectNodes.push_back(it);
+        for (const auto &it: partCache.objectEdges)
+            componentCache.objectEdges.push_back(it);
+        for (const auto &it: partCache.objectNodeVertices)
+            componentCache.objectNodeVertices.push_back(it);
     } else {
         std::vector<std::pair<CombineMode, std::vector<std::pair<QString, QString>>>> combineGroups;
         // Firstly, group by combine mode
@@ -1104,7 +1037,8 @@ MeshCombiner::Mesh *MeshGenerator::combineComponentMesh(const QString &component
             for (size_t i = 0; i < group.second.size(); ++i) {
                 if (used.find(i) != used.end())
                     continue;
-                const auto &colorName = group.second[i].second;
+                //const auto &colorName = group.second[i].second;
+                const QString colorName = "white"; // Force to use the same color = deactivate combine by color
                 if (lastColorName != colorName || lastColorName.isEmpty()) {
                     //qDebug() << "New sub group[" << currentSubGroupIndex << "] for color[" << colorName << "]";
                     componentIdStrings.push_back({});
@@ -1173,73 +1107,6 @@ MeshCombiner::Mesh *MeshGenerator::combineComponentMesh(const QString &component
         } else {
             // TODO: when no body is valid, may add ground plane as collision shape
             // ... ...
-        }
-    }
-    
-    if (nullptr != mesh) {
-        float polyCountValue = 1.0f;
-        bool remeshed = componentId.isNull() ? componentRemeshed(&m_snapshot->canvas, &polyCountValue) : componentRemeshed(component, &polyCountValue);
-        if (remeshed) {
-            std::vector<QVector3D> combinedVertices;
-            std::vector<std::vector<size_t>> combinedFaces;
-            mesh->fetch(combinedVertices, combinedFaces);
-            std::vector<QVector3D> newVertices;
-            std::vector<std::vector<size_t>> newQuads;
-            std::vector<std::vector<size_t>> newTriangles;
-            std::vector<std::tuple<QVector3D, float, size_t>> interpolatedNodes;
-            Outcome::buildInterpolatedNodes(componentCache.outcomeNodes,
-                componentCache.outcomeEdges,
-                &interpolatedNodes);
-            remesh(componentCache.outcomeNodes,
-                interpolatedNodes,
-                combinedVertices,
-                combinedFaces,
-                polyCountValue,
-                &newVertices,
-                &newQuads,
-                &newTriangles,
-                &componentCache.outcomeNodeVertices);
-            componentCache.sharedQuadEdges.clear();
-            for (const auto &face: newQuads) {
-                if (face.size() != 4)
-                    continue;
-                componentCache.sharedQuadEdges.insert({
-                    PositionKey(newVertices[face[0]]),
-                    PositionKey(newVertices[face[2]])
-                });
-                componentCache.sharedQuadEdges.insert({
-                    PositionKey(newVertices[face[1]]),
-                    PositionKey(newVertices[face[3]])
-                });
-            }
-            delete mesh;
-            mesh = nullptr;
-            bool disableSelfIntersectionTest = componentId.isNull() ||
-                CombineMode::Uncombined == componentCombineMode(component);
-            if (!disableSelfIntersectionTest) {
-                if (isManifold(newTriangles)) {
-                    mesh = new MeshCombiner::Mesh(newVertices, newTriangles, disableSelfIntersectionTest);
-                } else {
-                    fixHoles(newVertices, newTriangles);
-                    disableSelfIntersectionTest = true;
-                    mesh = new MeshCombiner::Mesh(newVertices, newTriangles, disableSelfIntersectionTest);
-                }
-            } else {
-                fixHoles(newVertices, newTriangles);
-                mesh = new MeshCombiner::Mesh(newVertices, newTriangles, disableSelfIntersectionTest);
-            }
-            if (nullptr != mesh) {
-                if (!disableSelfIntersectionTest) {
-                    if (mesh->isNull()) {
-                        delete mesh;
-                        mesh = nullptr;
-                    }
-                }
-                delete componentCache.mesh;
-                componentCache.mesh = nullptr;
-                if (nullptr != mesh)
-                    componentCache.mesh = new MeshCombiner::Mesh(*mesh);
-            }
         }
     }
     
@@ -1330,14 +1197,12 @@ MeshCombiner::Mesh *MeshGenerator::combineComponentChildGroupMesh(const std::vec
             componentCache.noneSeamVertices.insert(vertex);
         for (const auto &it: childComponentCache.sharedQuadEdges)
             componentCache.sharedQuadEdges.insert(it);
-        for (const auto &it: childComponentCache.outcomeNodes)
-            componentCache.outcomeNodes.push_back(it);
-        for (const auto &it: childComponentCache.outcomeEdges)
-            componentCache.outcomeEdges.push_back(it);
-        for (const auto &it: childComponentCache.outcomeNodeVertices)
-            componentCache.outcomeNodeVertices.push_back(it);
-        for (const auto &it: childComponentCache.outcomePaintMaps)
-            componentCache.outcomePaintMaps.push_back(it);
+        for (const auto &it: childComponentCache.objectNodes)
+            componentCache.objectNodes.push_back(it);
+        for (const auto &it: childComponentCache.objectEdges)
+            componentCache.objectEdges.push_back(it);
+        for (const auto &it: childComponentCache.objectNodeVertices)
+            componentCache.objectNodeVertices.push_back(it);
         
         if (nullptr == subMesh || subMesh->isNull()) {
             delete subMesh;
@@ -1434,26 +1299,297 @@ void MeshGenerator::setSmoothShadingThresholdAngleDegrees(float degrees)
     m_smoothShadingThresholdAngleDegrees = degrees;
 }
 
+void MeshGenerator::setInterpolationEnabled(bool interpolationEnabled)
+{
+    m_interpolationEnabled = interpolationEnabled;
+}
+
 void MeshGenerator::process()
 {
     generate();
     
-    this->moveToThread(QGuiApplication::instance()->thread());
     emit finished();
+}
+
+void MeshGenerator::setWeldEnabled(bool enabled)
+{
+    m_weldEnabled = enabled;
+}
+
+void MeshGenerator::collectErroredParts()
+{
+    for (const auto &it: m_cacheContext->parts) {
+        if (!it.second.isSuccessful) {
+            if (!it.second.joined)
+                continue;
+            
+            auto updateVertexIndices = [=](std::vector<std::vector<size_t>> &faces, size_t vertexStartIndex) {
+                for (auto &it: faces) {
+                    for (auto &subIt: it)
+                        subIt += vertexStartIndex;
+                }
+            };
+            
+            auto errorTriangleAndQuads = it.second.faces;
+            updateVertexIndices(errorTriangleAndQuads, m_object->vertices.size());
+            m_object->vertices.insert(m_object->vertices.end(), it.second.vertices.begin(), it.second.vertices.end());
+            m_object->triangleAndQuads.insert(m_object->triangleAndQuads.end(), errorTriangleAndQuads.begin(), errorTriangleAndQuads.end());
+            
+            auto errorTriangles = it.second.previewTriangles;
+            updateVertexIndices(errorTriangles, m_object->vertices.size());
+            m_object->vertices.insert(m_object->vertices.end(), it.second.previewVertices.begin(), it.second.previewVertices.end());
+            m_object->triangles.insert(m_object->triangles.end(), errorTriangles.begin(), errorTriangles.end());
+        }
+    }
+}
+
+void MeshGenerator::postprocessObject(Object *object) 
+{
+    std::vector<QVector3D> combinedFacesNormals;
+    for (const auto &face: object->triangles) {
+        combinedFacesNormals.push_back(QVector3D::normal(
+            object->vertices[face[0]],
+            object->vertices[face[1]],
+            object->vertices[face[2]]
+        ));
+    }
+    
+    object->triangleNormals = combinedFacesNormals;
+    
+    std::vector<std::pair<QUuid, QUuid>> sourceNodes;
+    triangleSourceNodeResolve(*object, m_nodeVertices, sourceNodes, &object->vertexSourceNodes);
+    object->setTriangleSourceNodes(sourceNodes);
+    
+    std::map<std::pair<QUuid, QUuid>, QColor> sourceNodeToColorMap;
+    for (const auto &node: object->nodes)
+        sourceNodeToColorMap.insert({{node.partId, node.nodeId}, node.color});
+    
+    object->triangleColors.resize(object->triangles.size(), Qt::white);
+    const std::vector<std::pair<QUuid, QUuid>> *triangleSourceNodes = object->triangleSourceNodes();
+    if (nullptr != triangleSourceNodes) {
+        for (size_t triangleIndex = 0; triangleIndex < object->triangles.size(); triangleIndex++) {
+            const auto &source = (*triangleSourceNodes)[triangleIndex];
+            object->triangleColors[triangleIndex] = sourceNodeToColorMap[source];
+        }
+    }
+    
+    std::vector<std::vector<QVector3D>> triangleVertexNormals;
+    generateSmoothTriangleVertexNormals(object->vertices,
+        object->triangles,
+        object->triangleNormals,
+        &triangleVertexNormals);
+    object->setTriangleVertexNormals(triangleVertexNormals);
+}
+
+void MeshGenerator::collectIncombinableComponentMeshes(const QString &componentIdString)
+{
+    const auto &component = findComponent(componentIdString);
+    if (CombineMode::Uncombined == componentCombineMode(component))
+        return;
+    const auto &componentCache = m_cacheContext->components[componentIdString];
+    for (const auto &mesh: componentCache.incombinableMeshes) {
+        m_isSuccessful = false;
+        collectIncombinableMesh(mesh, componentCache);
+    }
+    for (const auto &childIdString: valueOfKeyInMapOrEmpty(*component, "children").split(",")) {
+        if (childIdString.isEmpty())
+            continue;
+        collectIncombinableComponentMeshes(childIdString);
+    }
+}
+
+void MeshGenerator::collectIncombinableMesh(const MeshCombiner::Mesh *mesh, const GeneratedComponent &componentCache)
+{
+    if (nullptr == mesh)
+        return;
+
+    std::vector<QVector3D> uncombinedVertices;
+    std::vector<std::vector<size_t>> uncombinedFaces;
+    mesh->fetch(uncombinedVertices, uncombinedFaces);
+    std::vector<std::vector<size_t>> uncombinedTriangleAndQuads;
+    
+    recoverQuads(uncombinedVertices, uncombinedFaces, componentCache.sharedQuadEdges, uncombinedTriangleAndQuads);
+    
+    auto vertexStartIndex = m_object->vertices.size();
+    auto updateVertexIndices = [=](std::vector<std::vector<size_t>> &faces) {
+        for (auto &it: faces) {
+            for (auto &subIt: it)
+                subIt += vertexStartIndex;
+        }
+    };
+    updateVertexIndices(uncombinedFaces);
+    updateVertexIndices(uncombinedTriangleAndQuads);
+    
+    m_object->vertices.insert(m_object->vertices.end(), uncombinedVertices.begin(), uncombinedVertices.end());
+    m_object->triangles.insert(m_object->triangles.end(), uncombinedFaces.begin(), uncombinedFaces.end());
+    m_object->triangleAndQuads.insert(m_object->triangleAndQuads.end(), uncombinedTriangleAndQuads.begin(), uncombinedTriangleAndQuads.end());
+}
+
+void MeshGenerator::collectUncombinedComponent(const QString &componentIdString)
+{
+    const auto &component = findComponent(componentIdString);
+    if (CombineMode::Uncombined == componentCombineMode(component)) {
+        const auto &componentCache = m_cacheContext->components[componentIdString];
+        if (nullptr == componentCache.mesh || componentCache.mesh->isNull()) {
+            qDebug() << "Uncombined mesh is null";
+            return;
+        }
+        
+        m_object->nodes.insert(m_object->nodes.end(), componentCache.objectNodes.begin(), componentCache.objectNodes.end());
+        m_object->edges.insert(m_object->edges.end(), componentCache.objectEdges.begin(), componentCache.objectEdges.end());
+        m_nodeVertices.insert(m_nodeVertices.end(), componentCache.objectNodeVertices.begin(), componentCache.objectNodeVertices.end());
+        
+        collectIncombinableMesh(componentCache.mesh, componentCache);
+        return;
+    }
+    for (const auto &childIdString: valueOfKeyInMapOrEmpty(*component, "children").split(",")) {
+        if (childIdString.isEmpty())
+            continue;
+        collectUncombinedComponent(childIdString);
+    }
+}
+
+void MeshGenerator::generateSmoothTriangleVertexNormals(const std::vector<QVector3D> &vertices, const std::vector<std::vector<size_t>> &triangles,
+    const std::vector<QVector3D> &triangleNormals,
+    std::vector<std::vector<QVector3D>> *triangleVertexNormals)
+{
+    std::vector<QVector3D> smoothNormals;
+    angleSmooth(vertices,
+        triangles,
+        triangleNormals,
+        m_smoothShadingThresholdAngleDegrees,
+        smoothNormals);
+    triangleVertexNormals->resize(triangles.size(), {
+        QVector3D(), QVector3D(), QVector3D()
+    });
+    size_t index = 0;
+    for (size_t i = 0; i < triangles.size(); ++i) {
+        auto &normals = (*triangleVertexNormals)[i];
+        for (size_t j = 0; j < 3; ++j) {
+            if (index < smoothNormals.size())
+                normals[j] = smoothNormals[index];
+            ++index;
+        }
+    }
+}
+
+void MeshGenerator::setDefaultPartColor(const QColor &color)
+{
+    m_defaultPartColor = color;
+}
+
+QString MeshGenerator::reverseUuid(const QString &uuidString)
+{
+    QUuid uuid(uuidString);
+    QString newIdString = uuid.toString();
+    QString newRawId = newIdString.mid(1, 8) +
+        newIdString.mid(10, 4) +
+        newIdString.mid(15, 4) +
+        newIdString.mid(20, 4) +
+        newIdString.mid(25, 12);
+    std::reverse(newRawId.begin(), newRawId.end());
+    return "{" + newRawId.mid(0, 8) + "-" +
+        newRawId.mid(8, 4) + "-" +
+        newRawId.mid(12, 4) + "-" +
+        newRawId.mid(16, 4) + "-" +
+        newRawId.mid(20, 12) + "}";
+}
+
+void MeshGenerator::preprocessMirror()
+{
+    std::vector<std::map<QString, QString>> newParts;
+    std::map<QString, QString> partOldToNewMap;
+    for (auto &partIt: m_snapshot->parts) {
+        bool xMirrored = isTrueValueString(valueOfKeyInMapOrEmpty(partIt.second, "xMirrored"));
+        if (!xMirrored)
+            continue;
+        std::map<QString, QString> mirroredPart = partIt.second;
+        
+        QString newPartIdString = reverseUuid(mirroredPart["id"]);
+        partOldToNewMap.insert({mirroredPart["id"], newPartIdString});
+        
+        //qDebug() << "Added part:" << newPartIdString << "by mirror from:" << mirroredPart["id"];
+        
+        mirroredPart["__mirrorFromPartId"] = mirroredPart["id"];
+        mirroredPart["id"] = newPartIdString;
+        mirroredPart["__dirty"] = "true";
+        newParts.push_back(mirroredPart);
+    }
+    
+    for (const auto &it: partOldToNewMap)
+        m_snapshot->parts[it.second]["__mirroredByPartId"] = it.first;
+    
+    std::map<QString, QString> parentMap;
+    for (auto &componentIt: m_snapshot->components) {
+        for (const auto &childId: valueOfKeyInMapOrEmpty(componentIt.second, "children").split(",")) {
+            if (childId.isEmpty())
+                continue;
+            parentMap[childId] = componentIt.first;
+            //qDebug() << "Update component:" << childId << "parent to:" << componentIt.first;
+        }
+    }
+    for (const auto &childId: valueOfKeyInMapOrEmpty(m_snapshot->rootComponent, "children").split(",")) {
+        if (childId.isEmpty())
+            continue;
+        parentMap[childId] = QString();
+        //qDebug() << "Update component:" << childId << "parent to root";
+    }
+    
+    std::vector<std::map<QString, QString>> newComponents;
+    for (auto &componentIt: m_snapshot->components) {
+        QString linkDataType = valueOfKeyInMapOrEmpty(componentIt.second, "linkDataType");
+        if ("partId" != linkDataType)
+            continue;
+        QString partIdString = valueOfKeyInMapOrEmpty(componentIt.second, "linkData");
+        auto findPart = partOldToNewMap.find(partIdString);
+        if (findPart == partOldToNewMap.end())
+            continue;
+        std::map<QString, QString> mirroredComponent = componentIt.second;
+        QString newComponentIdString = reverseUuid(mirroredComponent["id"]);
+        //qDebug() << "Added component:" << newComponentIdString << "by mirror from:" << valueOfKeyInMapOrEmpty(componentIt.second, "id");
+        mirroredComponent["linkData"] = findPart->second;
+        mirroredComponent["id"] = newComponentIdString;
+        mirroredComponent["__dirty"] = "true";
+        parentMap[newComponentIdString] = parentMap[valueOfKeyInMapOrEmpty(componentIt.second, "id")];
+        //qDebug() << "Update component:" << newComponentIdString << "parent to:" << parentMap[valueOfKeyInMapOrEmpty(componentIt.second, "id")];
+        newComponents.push_back(mirroredComponent);
+    }
+
+    for (const auto &it: newParts) {
+        m_snapshot->parts[valueOfKeyInMapOrEmpty(it, "id")] = it;
+    }
+    for (const auto &it: newComponents) {
+        QString idString = valueOfKeyInMapOrEmpty(it, "id");
+        QString parentIdString = parentMap[idString];
+        m_snapshot->components[idString] = it;
+        if (parentIdString.isEmpty()) {
+            m_snapshot->rootComponent["children"] += "," + idString;
+            //qDebug() << "Update rootComponent children:" << m_snapshot->rootComponent["children"];
+        } else {
+            m_snapshot->components[parentIdString]["children"] += "," + idString;
+            //qDebug() << "Update component:" << parentIdString << "children:" << m_snapshot->components[parentIdString]["children"];
+        }
+    }
 }
 
 void MeshGenerator::generate()
 {
     if (nullptr == m_snapshot)
         return;
-    
+
     m_isSuccessful = true;
     
     QElapsedTimer countTimeConsumed;
     countTimeConsumed.start();
     
-    m_outcome = new Outcome;
-    m_outcome->meshId = m_id;
+    m_mainProfileMiddleX = valueOfKeyInMapOrEmpty(m_snapshot->canvas, "originX").toFloat();
+    m_mainProfileMiddleY = valueOfKeyInMapOrEmpty(m_snapshot->canvas, "originY").toFloat();
+    m_sideProfileMiddleX = valueOfKeyInMapOrEmpty(m_snapshot->canvas, "originZ").toFloat();
+    
+    preprocessMirror();
+    
+    m_object = new Object;
+    m_object->meshId = m_id;
     //m_cutFaceTransforms = new std::map<QUuid, nodemesh::Builder::CutFaceTransform>;
     //m_nodesCutFaces = new std::map<QUuid, std::map<QString, QVector2D>>;
     
@@ -1462,6 +1598,10 @@ void MeshGenerator::generate()
         m_cacheContext = new GeneratedCacheContext;
         needDeleteCacheContext = true;
     } else {
+        //qDebug() << "m_cacheContext->parts.size:" << m_cacheContext->parts.size();
+        //qDebug() << "m_cacheContext->components.size:" << m_cacheContext->components.size();
+        //qDebug() << "m_cacheContext->cachedCombination.size:" << m_cacheContext->cachedCombination.size();
+        
         m_cacheEnabled = true;
         for (auto it = m_cacheContext->parts.begin(); it != m_cacheContext->parts.end(); ) {
             if (m_snapshot->parts.find(it->first) == m_snapshot->parts.end()) {
@@ -1515,74 +1655,46 @@ void MeshGenerator::generate()
     
     m_dirtyComponentIds.insert(QUuid().toString());
     
-    m_mainProfileMiddleX = valueOfKeyInMapOrEmpty(m_snapshot->canvas, "originX").toFloat();
-    m_mainProfileMiddleY = valueOfKeyInMapOrEmpty(m_snapshot->canvas, "originY").toFloat();
-    m_sideProfileMiddleX = valueOfKeyInMapOrEmpty(m_snapshot->canvas, "originZ").toFloat();
-    
-    bool remeshed = componentRemeshed(&m_snapshot->canvas);
-    
     CombineMode combineMode;
     auto combinedMesh = combineComponentMesh(QUuid().toString(), &combineMode);
     
     const auto &componentCache = m_cacheContext->components[QUuid().toString()];
     
-    m_outcome->nodes = componentCache.outcomeNodes;
-    m_outcome->edges = componentCache.outcomeEdges;
-    m_outcome->paintMaps = componentCache.outcomePaintMaps;
-    m_outcome->nodeVertices = componentCache.outcomeNodeVertices;
+    m_object->nodes = componentCache.objectNodes;
+    m_object->edges = componentCache.objectEdges;
+    m_nodeVertices = componentCache.objectNodeVertices;
         
     std::vector<QVector3D> combinedVertices;
     std::vector<std::vector<size_t>> combinedFaces;
     if (nullptr != combinedMesh) {
         combinedMesh->fetch(combinedVertices, combinedFaces);
         if (m_weldEnabled) {
-            if (!remeshed) {
-                size_t totalAffectedNum = 0;
-                size_t affectedNum = 0;
-                do {
-                    std::vector<QVector3D> weldedVertices;
-                    std::vector<std::vector<size_t>> weldedFaces;
-                    affectedNum = weldSeam(combinedVertices, combinedFaces,
-                        0.025, componentCache.noneSeamVertices,
-                        weldedVertices, weldedFaces);
-                    combinedVertices = weldedVertices;
-                    combinedFaces = weldedFaces;
-                    totalAffectedNum += affectedNum;
-                } while (affectedNum > 0);
-            }
+            size_t totalAffectedNum = 0;
+            size_t affectedNum = 0;
+            do {
+                std::vector<QVector3D> weldedVertices;
+                std::vector<std::vector<size_t>> weldedFaces;
+                affectedNum = weldSeam(combinedVertices, combinedFaces,
+                    0.025, componentCache.noneSeamVertices,
+                    weldedVertices, weldedFaces);
+                combinedVertices = weldedVertices;
+                combinedFaces = weldedFaces;
+                totalAffectedNum += affectedNum;
+            } while (affectedNum > 0);
         }
-        recoverQuads(combinedVertices, combinedFaces, componentCache.sharedQuadEdges, m_outcome->triangleAndQuads);
-        m_outcome->vertices = combinedVertices;
-        m_outcome->triangles = combinedFaces;
+        recoverQuads(combinedVertices, combinedFaces, componentCache.sharedQuadEdges, m_object->triangleAndQuads);
+        m_object->vertices = combinedVertices;
+        m_object->triangles = combinedFaces;
     }
     
     // Recursively check uncombined components
     collectUncombinedComponent(QUuid().toString());
     collectIncombinableComponentMeshes(QUuid().toString());
     
-    // Fetch nodes as body nodes before cloth nodes collecting
-    std::set<std::pair<QUuid, QUuid>> bodyNodeMap;
-    m_outcome->bodyNodes.reserve(m_outcome->nodes.size());
-    for (const auto &it: m_outcome->nodes) {
-        if (it.joined) {
-            bodyNodeMap.insert({it.partId, it.nodeId});
-            m_outcome->bodyNodes.push_back(it);
-        }
-    }
-    m_outcome->bodyEdges.reserve(m_outcome->edges.size());
-    for (const auto &it: m_outcome->edges) {
-        if (bodyNodeMap.find(it.first) == bodyNodeMap.end())
-            continue;
-        if (bodyNodeMap.find(it.second) == bodyNodeMap.end())
-            continue;
-        m_outcome->bodyEdges.push_back(it);
-    }
-    
-    collectClothComponent(QUuid().toString());
     collectErroredParts();
-    postprocessOutcome(m_outcome);
+    postprocessObject(m_object);
     
-    m_resultMesh = new Model(*m_outcome);
+    m_resultMesh = new Model(*m_object);
     
     delete combinedMesh;
 
@@ -1592,302 +1704,4 @@ void MeshGenerator::generate()
     }
     
     qDebug() << "The mesh generation took" << countTimeConsumed.elapsed() << "milliseconds";
-}
-
-void MeshGenerator::setWeldEnabled(bool enabled)
-{
-    m_weldEnabled = enabled;
-}
-
-void MeshGenerator::collectErroredParts()
-{
-    for (const auto &it: m_cacheContext->parts) {
-        if (!it.second.isSuccessful) {
-            if (!it.second.joined)
-                continue;
-            
-            auto updateVertexIndices = [=](std::vector<std::vector<size_t>> &faces, size_t vertexStartIndex) {
-                for (auto &it: faces) {
-                    for (auto &subIt: it)
-                        subIt += vertexStartIndex;
-                }
-            };
-            
-            auto errorTriangleAndQuads = it.second.faces;
-            updateVertexIndices(errorTriangleAndQuads, m_outcome->vertices.size());
-            m_outcome->vertices.insert(m_outcome->vertices.end(), it.second.vertices.begin(), it.second.vertices.end());
-            m_outcome->triangleAndQuads.insert(m_outcome->triangleAndQuads.end(), errorTriangleAndQuads.begin(), errorTriangleAndQuads.end());
-            
-            auto errorTriangles = it.second.previewTriangles;
-            updateVertexIndices(errorTriangles, m_outcome->vertices.size());
-            m_outcome->vertices.insert(m_outcome->vertices.end(), it.second.previewVertices.begin(), it.second.previewVertices.end());
-            m_outcome->triangles.insert(m_outcome->triangles.end(), errorTriangles.begin(), errorTriangles.end());
-        }
-    }
-}
-
-void MeshGenerator::postprocessOutcome(Outcome *outcome) 
-{
-    std::vector<QVector3D> combinedFacesNormals;
-    for (const auto &face: outcome->triangles) {
-        combinedFacesNormals.push_back(QVector3D::normal(
-            outcome->vertices[face[0]],
-            outcome->vertices[face[1]],
-            outcome->vertices[face[2]]
-        ));
-    }
-    
-    outcome->triangleNormals = combinedFacesNormals;
-    
-    std::vector<std::pair<QUuid, QUuid>> sourceNodes;
-    triangleSourceNodeResolve(*outcome, sourceNodes, &outcome->vertexSourceNodes);
-    outcome->setTriangleSourceNodes(sourceNodes);
-    
-    std::map<std::pair<QUuid, QUuid>, QColor> sourceNodeToColorMap;
-    for (const auto &node: outcome->nodes)
-        sourceNodeToColorMap.insert({{node.partId, node.nodeId}, node.color});
-    
-    outcome->triangleColors.resize(outcome->triangles.size(), Qt::white);
-    const std::vector<std::pair<QUuid, QUuid>> *triangleSourceNodes = outcome->triangleSourceNodes();
-    if (nullptr != triangleSourceNodes) {
-        for (size_t triangleIndex = 0; triangleIndex < outcome->triangles.size(); triangleIndex++) {
-            const auto &source = (*triangleSourceNodes)[triangleIndex];
-            outcome->triangleColors[triangleIndex] = sourceNodeToColorMap[source];
-        }
-    }
-    
-    std::vector<std::vector<QVector3D>> triangleVertexNormals;
-    generateSmoothTriangleVertexNormals(outcome->vertices,
-        outcome->triangles,
-        outcome->triangleNormals,
-        &triangleVertexNormals);
-    outcome->setTriangleVertexNormals(triangleVertexNormals);
-}
-
-void MeshGenerator::remesh(const std::vector<OutcomeNode> &inputNodes,
-        const std::vector<std::tuple<QVector3D, float, size_t>> &interpolatedNodes,
-        const std::vector<QVector3D> &inputVertices,
-        const std::vector<std::vector<size_t>> &inputFaces,
-        float targetVertexMultiplyFactor,
-        std::vector<QVector3D> *outputVertices,
-        std::vector<std::vector<size_t>> *outputQuads,
-        std::vector<std::vector<size_t>> *outputTriangles,
-        std::vector<std::pair<QVector3D, std::pair<QUuid, QUuid>>> *outputNodeVertices)
-{
-    std::vector<std::pair<QVector3D, float>> nodes;
-    std::vector<std::pair<QUuid, QUuid>> sourceIds;
-    nodes.reserve(interpolatedNodes.size());
-    sourceIds.reserve(interpolatedNodes.size());
-    for (const auto &it: interpolatedNodes) {
-        nodes.push_back(std::make_pair(std::get<0>(it), std::get<1>(it)));
-        const auto &sourceNode = inputNodes[std::get<2>(it)];
-        sourceIds.push_back(std::make_pair(sourceNode.partId, sourceNode.nodeId));
-    }
-    Remesher remesher;
-    remesher.setMesh(inputVertices, inputFaces);
-    remesher.setNodes(nodes, sourceIds);
-    remesher.remesh(targetVertexMultiplyFactor);
-    *outputVertices = remesher.getRemeshedVertices();
-    const auto &remeshedFaces = remesher.getRemeshedFaces();
-    *outputQuads = remeshedFaces;
-    outputTriangles->clear();
-    outputTriangles->reserve(remeshedFaces.size() * 2);
-    for (const auto &it: remeshedFaces) {
-        outputTriangles->push_back(std::vector<size_t> {
-            it[0], it[1], it[2]
-        });
-        if (4 == it.size()) {
-            outputTriangles->push_back(std::vector<size_t> {
-                it[2], it[3], it[0]
-            });
-        }
-    }
-    const auto &remeshedVertexSources = remesher.getRemeshedVertexSources();
-    outputNodeVertices->clear();
-    outputNodeVertices->reserve(outputVertices->size());
-    for (size_t i = 0; i < outputVertices->size(); ++i) {
-        const auto &vertexSource = remeshedVertexSources[i];
-        if (vertexSource.first.isNull())
-            continue;
-        outputNodeVertices->push_back(std::make_pair((*outputVertices)[i], vertexSource));
-    }
-}
-
-void MeshGenerator::collectIncombinableComponentMeshes(const QString &componentIdString)
-{
-    const auto &component = findComponent(componentIdString);
-    if (CombineMode::Uncombined == componentCombineMode(component))
-        return;
-    const auto &componentCache = m_cacheContext->components[componentIdString];
-    for (const auto &mesh: componentCache.incombinableMeshes) {
-        m_isSuccessful = false;
-        collectIncombinableMesh(mesh, componentCache);
-    }
-    for (const auto &childIdString: valueOfKeyInMapOrEmpty(*component, "children").split(",")) {
-        if (childIdString.isEmpty())
-            continue;
-        collectIncombinableComponentMeshes(childIdString);
-    }
-}
-
-void MeshGenerator::collectIncombinableMesh(const MeshCombiner::Mesh *mesh, const GeneratedComponent &componentCache)
-{
-    if (nullptr == mesh)
-        return;
-
-    std::vector<QVector3D> uncombinedVertices;
-    std::vector<std::vector<size_t>> uncombinedFaces;
-    mesh->fetch(uncombinedVertices, uncombinedFaces);
-    std::vector<std::vector<size_t>> uncombinedTriangleAndQuads;
-    
-    recoverQuads(uncombinedVertices, uncombinedFaces, componentCache.sharedQuadEdges, uncombinedTriangleAndQuads);
-    
-    auto vertexStartIndex = m_outcome->vertices.size();
-    auto updateVertexIndices = [=](std::vector<std::vector<size_t>> &faces) {
-        for (auto &it: faces) {
-            for (auto &subIt: it)
-                subIt += vertexStartIndex;
-        }
-    };
-    updateVertexIndices(uncombinedFaces);
-    updateVertexIndices(uncombinedTriangleAndQuads);
-    
-    m_outcome->vertices.insert(m_outcome->vertices.end(), uncombinedVertices.begin(), uncombinedVertices.end());
-    m_outcome->triangles.insert(m_outcome->triangles.end(), uncombinedFaces.begin(), uncombinedFaces.end());
-    m_outcome->triangleAndQuads.insert(m_outcome->triangleAndQuads.end(), uncombinedTriangleAndQuads.begin(), uncombinedTriangleAndQuads.end());
-}
-
-void MeshGenerator::collectUncombinedComponent(const QString &componentIdString)
-{
-    const auto &component = findComponent(componentIdString);
-    if (CombineMode::Uncombined == componentCombineMode(component)) {
-        if (ComponentLayer::Body != componentLayer(component))
-            return;
-        const auto &componentCache = m_cacheContext->components[componentIdString];
-        if (nullptr == componentCache.mesh || componentCache.mesh->isNull()) {
-            qDebug() << "Uncombined mesh is null";
-            return;
-        }
-        
-        m_outcome->nodes.insert(m_outcome->nodes.end(), componentCache.outcomeNodes.begin(), componentCache.outcomeNodes.end());
-        m_outcome->edges.insert(m_outcome->edges.end(), componentCache.outcomeEdges.begin(), componentCache.outcomeEdges.end());
-        m_outcome->nodeVertices.insert(m_outcome->nodeVertices.end(), componentCache.outcomeNodeVertices.begin(), componentCache.outcomeNodeVertices.end());
-        m_outcome->paintMaps.insert(m_outcome->paintMaps.end(), componentCache.outcomePaintMaps.begin(), componentCache.outcomePaintMaps.end());
-        
-        collectIncombinableMesh(componentCache.mesh, componentCache);
-        return;
-    }
-    for (const auto &childIdString: valueOfKeyInMapOrEmpty(*component, "children").split(",")) {
-        if (childIdString.isEmpty())
-            continue;
-        collectUncombinedComponent(childIdString);
-    }
-}
-
-void MeshGenerator::collectClothComponentIdStrings(const QString &componentIdString,
-        std::vector<QString> *componentIdStrings)
-{
-    const auto &component = findComponent(componentIdString);
-    if (ComponentLayer::Cloth == componentLayer(component)) {
-        const auto &componentCache = m_cacheContext->components[componentIdString];
-        if (nullptr == componentCache.mesh) {
-            return;
-        }
-        componentIdStrings->push_back(componentIdString);
-        return;
-    }
-    for (const auto &childIdString: valueOfKeyInMapOrEmpty(*component, "children").split(",")) {
-        if (childIdString.isEmpty())
-            continue;
-        collectClothComponentIdStrings(childIdString, componentIdStrings);
-    }
-}
-
-void MeshGenerator::collectClothComponent(const QString &componentIdString)
-{
-    if (m_clothCollisionTriangles.empty())
-        return;
-    
-    std::vector<QString> componentIdStrings;
-    collectClothComponentIdStrings(componentIdString, &componentIdStrings);
-    
-    std::vector<ClothMesh> clothMeshes(componentIdStrings.size());
-    for (size_t i = 0; i < componentIdStrings.size(); ++i) {
-        const auto &componentIdString = componentIdStrings[i];
-        const auto &componentCache = m_cacheContext->components[componentIdString];
-        if (nullptr == componentCache.mesh) {
-            return;
-        }
-        const auto &component = findComponent(componentIdString);
-        auto &clothMesh = clothMeshes[i];
-        componentCache.mesh->fetch(clothMesh.vertices, clothMesh.faces);
-        clothMesh.clothForce = componentClothForce(component);
-        clothMesh.clothOffset = componentClothOffset(component);
-        clothMesh.clothStiffness = componentClothStiffness(component);
-        clothMesh.clothIteration = componentClothIteration(component);
-        clothMesh.outcomeNodeVertices = &componentCache.outcomeNodeVertices;
-        m_outcome->clothNodes.insert(m_outcome->clothNodes.end(), componentCache.outcomeNodes.begin(), componentCache.outcomeNodes.end());
-        m_outcome->nodes.insert(m_outcome->nodes.end(), componentCache.outcomeNodes.begin(), componentCache.outcomeNodes.end());
-        m_outcome->edges.insert(m_outcome->edges.end(), componentCache.outcomeEdges.begin(), componentCache.outcomeEdges.end());
-    }
-    simulateClothMeshes(&clothMeshes,
-        &m_clothCollisionVertices,
-        &m_clothCollisionTriangles);
-    for (auto &clothMesh: clothMeshes) {
-        auto vertexStartIndex = m_outcome->vertices.size();
-        auto updateVertexIndices = [=](std::vector<std::vector<size_t>> &faces) {
-            for (auto &it: faces) {
-                for (auto &subIt: it)
-                    subIt += vertexStartIndex;
-            }
-        };
-        updateVertexIndices(clothMesh.faces);
-        m_outcome->vertices.insert(m_outcome->vertices.end(), clothMesh.vertices.begin(), clothMesh.vertices.end());
-        for (const auto &it: clothMesh.faces) {
-            if (4 == it.size()) {
-                m_outcome->triangles.push_back(std::vector<size_t> {
-                    it[0], it[1], it[2]
-                });
-                m_outcome->triangles.push_back(std::vector<size_t> {
-                    it[2], it[3], it[0]
-                });
-            } else if (3 == it.size()) {
-                m_outcome->triangles.push_back(it);
-            }
-        }
-        m_outcome->triangleAndQuads.insert(m_outcome->triangleAndQuads.end(), clothMesh.faces.begin(), clothMesh.faces.end());
-        for (size_t i = 0; i < clothMesh.vertices.size(); ++i) {
-            const auto &source = clothMesh.vertexSources[i];
-            m_outcome->nodeVertices.push_back(std::make_pair(clothMesh.vertices[i], source));
-        }
-    }
-}
-
-void MeshGenerator::generateSmoothTriangleVertexNormals(const std::vector<QVector3D> &vertices, const std::vector<std::vector<size_t>> &triangles,
-    const std::vector<QVector3D> &triangleNormals,
-    std::vector<std::vector<QVector3D>> *triangleVertexNormals)
-{
-    std::vector<QVector3D> smoothNormals;
-    angleSmooth(vertices,
-        triangles,
-        triangleNormals,
-        m_smoothShadingThresholdAngleDegrees,
-        smoothNormals);
-    triangleVertexNormals->resize(triangles.size(), {
-        QVector3D(), QVector3D(), QVector3D()
-    });
-    size_t index = 0;
-    for (size_t i = 0; i < triangles.size(); ++i) {
-        auto &normals = (*triangleVertexNormals)[i];
-        for (size_t j = 0; j < 3; ++j) {
-            if (index < smoothNormals.size())
-                normals[j] = smoothNormals[index];
-            ++index;
-        }
-    }
-}
-
-void MeshGenerator::setDefaultPartColor(const QColor &color)
-{
-    m_defaultPartColor = color;
 }

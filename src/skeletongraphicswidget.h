@@ -124,72 +124,6 @@ public:
     }
 };
 
-class SkeletonGraphicsMarkerItem : public QGraphicsPolygonItem
-{
-public:
-    SkeletonGraphicsMarkerItem()
-    {
-        updateAppearance();
-    }
-    void addPoint(const QPointF &point)
-    {
-        m_polygon.append(point);
-        setPolygon(m_polygon);
-    }
-    void clear()
-    {
-        m_polygon.clear();
-        setPolygon(m_polygon);
-    }
-    QColor color()
-    {
-        return m_mainProfile ? Theme::red : Theme::green;
-    }
-    bool isMainProfile()
-    {
-        return m_mainProfile;
-    }
-    void toggleProfile()
-    {
-        m_mainProfile = !m_mainProfile;
-        updateAppearance();
-    }
-    void save()
-    {
-        m_previousPolygon = m_polygon;
-        clear();
-    }
-    const QPolygonF &previousPolygon()
-    {
-        return m_previousPolygon;
-    }
-    const QPolygonF &polygon()
-    {
-        return m_polygon;
-    }
-    void reset()
-    {
-        m_previousPolygon.clear();
-        clear();
-        if (!m_mainProfile) {
-            m_mainProfile = true;
-            updateAppearance();
-        }
-    }
-private:
-    QPolygonF m_polygon;
-    QPolygonF m_previousPolygon;
-    bool m_mainProfile = true;
-    void updateAppearance()
-    {
-        QColor penColor(color());
-        QPen pen(penColor);
-        pen.setWidth(2);
-        pen.setStyle(Qt::SolidLine);
-        setPen(pen);
-    }
-};
-
 class SkeletonGraphicsNodeItem : public QGraphicsEllipseItem
 {
 public:
@@ -483,6 +417,7 @@ signals:
     void open();
     void exportResult();
     void breakEdge(QUuid edgeId);
+    void reduceNode(QUuid nodeId);
     void reverseEdge(QUuid edgeId);
     void moveOriginBy(float x, float y, float z);
     void partChecked(QUuid partId);
@@ -505,7 +440,6 @@ signals:
     void showCutFaceSettingPopup(const QPoint &globalPos, std::set<QUuid> nodeIds);
     void zoomRenderedModelBy(float delta);
     void switchNodeXZ(QUuid nodeId);
-    void switchChainSide(std::set<QUuid> nodeIds);
     void enableAllPositionRelatedLocks();
     void disableAllPositionRelatedLocks();
     void shortcutToggleWireframe();
@@ -513,8 +447,7 @@ signals:
     void showOrHideAllComponents();
     void shortcutToggleFlatShading();
     void shortcutToggleRotation();
-    void createGriddedPartsFromNodes(const std::set<QUuid> &nodeIds);
-    void addPartByPolygons(const QPolygonF &mainProfile, const QPolygonF &sideProfile, const QSizeF &canvasSize);
+    void loadedTurnaroundImageChanged();
 public:
     SkeletonGraphicsWidget(const SkeletonDocument *document);
     std::map<QUuid, std::pair<SkeletonGraphicsNodeItem *, SkeletonGraphicsNodeItem *>> nodeItemMap;
@@ -542,10 +475,9 @@ public:
     bool hasTwoDisconnectedNodesSelection();
     bool hasCutFaceAdjustedNodesSelection();
     void setModelWidget(ModelWidget *modelWidget);
-    void setNodePositionModifyOnly(bool nodePositionModifyOnly);
-    void setMainProfileOnly(bool mainProfileOnly);
     bool inputWheelEventFromOtherWidget(QWheelEvent *event);
-    bool rotated(void);
+    bool rotated();
+    const QImage *loadedTurnaroundImage() const;
 protected:
     void mouseMoveEvent(QMouseEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
@@ -587,6 +519,7 @@ public slots:
     void fadeSelected();
     void colorizeSelected();
     void breakSelected();
+    void reduceSelected();
     void reverseSelectedEdges();
     void connectSelected();
     void rotateSelected(int degree);
@@ -612,13 +545,11 @@ public slots:
     void setSelectedNodesBoneMark(BoneMark boneMark);
     void timeToRemoveDeferredNodesAndEdges();
     void switchSelectedXZ();
-    void switchSelectedChainSide();
     void showSelectedCutFaceSettingPopup(const QPoint &pos);
     void clearSelectedCutFace();
     void setRotated(bool rotated);
     void shortcutDelete();
     void shortcutAddMode();
-    //void shortcutMarkMode();
     void shortcutUndo();
     void shortcutRedo();
     void shortcutXlock();
@@ -676,45 +607,40 @@ private:
     void alignSelectedToLocal(bool alignToVerticalCenter, bool alignToHorizontalCenter);
     void rotateItems(const std::set<SkeletonGraphicsNodeItem *> &nodeItems, int degree, QVector2D center);
     void rotateAllSideProfile(int degree);
-private: //need initialize
-    const SkeletonDocument *m_document;
-    QGraphicsPixmapItem *m_backgroundItem;
-    bool m_turnaroundChanged;
-    TurnaroundLoader *m_turnaroundLoader;
-    bool m_dragStarted;
-    bool m_moveStarted;
-    SkeletonGraphicsNodeItem *m_cursorNodeItem;
-    SkeletonGraphicsEdgeItem *m_cursorEdgeItem;
-    SkeletonGraphicsNodeItem *m_addFromNodeItem;
-    SkeletonGraphicsNodeItem *m_hoveredNodeItem;
-    SkeletonGraphicsEdgeItem *m_hoveredEdgeItem;
-    float m_lastAddedX;
-    float m_lastAddedY;
-    float m_lastAddedZ;
-    SkeletonGraphicsSelectionItem *m_selectionItem;
-    SkeletonGraphicsMarkerItem *m_markerItem;
-    bool m_rangeSelectionStarted;
-    bool m_markerStarted;
-    bool m_mouseEventFromSelf;
-    bool m_moveHappened;
-    int m_lastRot;
-    SkeletonGraphicsOriginItem *m_mainOriginItem;
-    SkeletonGraphicsOriginItem *m_sideOriginItem;
-    SkeletonGraphicsOriginItem *m_hoveredOriginItem;
-    SkeletonGraphicsOriginItem *m_checkedOriginItem;
-    unsigned long long m_ikMoveUpdateVersion;
-    SkeletonIkMover *m_ikMover;
-    QTimer *m_deferredRemoveTimer;
-    bool m_eventForwardingToModelWidget;
-    ModelWidget *m_modelWidget;
-    bool m_inTempDragMode;
-    SkeletonDocumentEditMode m_modeBeforeEnterTempDragMode;
-    bool m_nodePositionModifyOnly;
-    bool m_mainProfileOnly;
-    float m_turnaroundOpacity;
-    bool m_rotated;
-    QImage *m_backgroundImage;
 private:
+    const SkeletonDocument *m_document = nullptr;
+    QGraphicsPixmapItem *m_backgroundItem = nullptr;
+    bool m_turnaroundChanged = false;
+    TurnaroundLoader *m_turnaroundLoader = nullptr;
+    bool m_dragStarted = false;
+    bool m_moveStarted = false;
+    SkeletonGraphicsNodeItem *m_cursorNodeItem = nullptr;
+    SkeletonGraphicsEdgeItem *m_cursorEdgeItem = nullptr;
+    SkeletonGraphicsNodeItem *m_addFromNodeItem = nullptr;
+    SkeletonGraphicsNodeItem *m_hoveredNodeItem = nullptr;
+    SkeletonGraphicsEdgeItem *m_hoveredEdgeItem = nullptr;
+    float m_lastAddedX = false;
+    float m_lastAddedY = false;
+    float m_lastAddedZ = false;
+    SkeletonGraphicsSelectionItem *m_selectionItem = nullptr;
+    bool m_rangeSelectionStarted = false;
+    bool m_mouseEventFromSelf = false;
+    bool m_moveHappened = false;
+    int m_lastRot = 0;
+    SkeletonGraphicsOriginItem *m_mainOriginItem = nullptr;
+    SkeletonGraphicsOriginItem *m_sideOriginItem = nullptr;
+    SkeletonGraphicsOriginItem *m_hoveredOriginItem = nullptr;
+    SkeletonGraphicsOriginItem *m_checkedOriginItem = nullptr;
+    unsigned long long m_ikMoveUpdateVersion = 0;
+    SkeletonIkMover *m_ikMover = nullptr;
+    QTimer *m_deferredRemoveTimer = nullptr;
+    bool m_eventForwardingToModelWidget = false;
+    ModelWidget *m_modelWidget = nullptr;
+    bool m_inTempDragMode = false;
+    SkeletonDocumentEditMode m_modeBeforeEnterTempDragMode = SkeletonDocumentEditMode::Select;
+    float m_turnaroundOpacity = 0.25f;
+    bool m_rotated = false;
+    QImage *m_backgroundImage = nullptr;
     QVector3D m_ikMoveTarget;
     QUuid m_ikMoveEndEffectorId;
     std::set<QGraphicsItem *> m_rangeSelectionSet;

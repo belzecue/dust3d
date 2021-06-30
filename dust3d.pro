@@ -105,14 +105,14 @@ DEFINES += "PROJECT_DEFINED_APP_REFERENCE_GUIDE_URL=\"\\\"$$REFERENCE_GUIDE_URL\
 DEFINES += "PROJECT_DEFINED_APP_UPDATES_CHECKER_URL=\"\\\"$$UPDATES_CHECKER_URL\\\"\""
 DEFINES += "PROJECT_DEFINED_APP_PLATFORM=\"\\\"$$PLATFORM\\\"\""
 
+CONFIG += c++14
+
 macx {
 	QMAKE_CXXFLAGS_RELEASE -= -O
 	QMAKE_CXXFLAGS_RELEASE -= -O1
 	QMAKE_CXXFLAGS_RELEASE -= -O2
 
 	QMAKE_CXXFLAGS_RELEASE += -O3
-
-	QMAKE_CXXFLAGS += -std=c++11
 }
 
 unix:!macx {
@@ -121,17 +121,19 @@ unix:!macx {
 	QMAKE_CXXFLAGS_RELEASE -= -O2
 
 	QMAKE_CXXFLAGS_RELEASE += -O3
-
-	QMAKE_CXXFLAGS += -std=c++11
 }
 
 win32 {
+    QMAKE_CXXFLAGS += /MP
 	QMAKE_CXXFLAGS += /O2
 	QMAKE_CXXFLAGS += /bigobj
 }
 
+DEFINES += NOMINMAX
+
 include(thirdparty/QtAwesome/QtAwesome/QtAwesome.pri)
 include(thirdparty/qtsingleapplication/src/qtsingleapplication.pri)
+include(thirdparty/Qt-Color-Widgets/color_widgets.pri)
 
 INCLUDEPATH += src
 
@@ -213,8 +215,8 @@ HEADERS += src/model.h
 SOURCES += src/texturegenerator.cpp
 HEADERS += src/texturegenerator.h
 
-SOURCES += src/outcome.cpp
-HEADERS += src/outcome.h
+SOURCES += src/object.cpp
+HEADERS += src/object.h
 
 SOURCES += src/meshresultpostprocessor.cpp
 HEADERS += src/meshresultpostprocessor.h
@@ -227,9 +229,6 @@ HEADERS += src/logbrowserdialog.h
 
 SOURCES += src/floatnumberwidget.cpp
 HEADERS += src/floatnumberwidget.h
-
-SOURCES += src/exportpreviewwidget.cpp
-HEADERS += src/exportpreviewwidget.h
 
 SOURCES += src/ccdikresolver.cpp
 HEADERS += src/ccdikresolver.h
@@ -261,8 +260,8 @@ HEADERS += src/skeletonside.h
 SOURCES += src/meshsplitter.cpp
 HEADERS += src/meshsplitter.h
 
-SOURCES += src/rigger.cpp
-HEADERS += src/rigger.h
+SOURCES += src/rig.cpp
+HEADERS += src/rig.h
 
 SOURCES += src/rigtype.cpp
 HEADERS += src/rigtype.h
@@ -276,35 +275,8 @@ HEADERS += src/skinnedmeshcreator.h
 SOURCES += src/jointnodetree.cpp
 HEADERS += src/jointnodetree.h
 
-SOURCES += src/poser.cpp
-HEADERS += src/poser.h
-
-SOURCES += src/posemeshcreator.cpp
-HEADERS += src/posemeshcreator.h
-
-SOURCES += src/posepreviewmanager.cpp
-HEADERS += src/posepreviewmanager.h
-
-SOURCES += src/poseeditwidget.cpp
-HEADERS += src/poseeditwidget.h
-
-SOURCES += src/poselistwidget.cpp
-HEADERS += src/poselistwidget.h
-
-SOURCES += src/posemanagewidget.cpp
-HEADERS += src/posemanagewidget.h
-
-SOURCES += src/posepreviewsgenerator.cpp
-HEADERS += src/posepreviewsgenerator.h
-
-SOURCES += src/posewidget.cpp
-HEADERS += src/posewidget.h
-
 SOURCES += src/preferenceswidget.cpp
 HEADERS += src/preferenceswidget.h
-
-SOURCES += src/motioneditwidget.cpp
-HEADERS += src/motioneditwidget.h
 
 SOURCES += src/motionmanagewidget.cpp
 HEADERS += src/motionmanagewidget.h
@@ -317,9 +289,6 @@ HEADERS += src/motionwidget.h
 
 SOURCES += src/motionsgenerator.cpp
 HEADERS += src/motionsgenerator.h
-
-SOURCES += src/animationclipplayer.cpp
-HEADERS += src/animationclipplayer.h
 
 SOURCES += src/texturetype.cpp
 HEADERS += src/texturetype.h
@@ -348,23 +317,11 @@ HEADERS += src/material.h
 SOURCES += src/fbxfile.cpp
 HEADERS += src/fbxfile.h
 
-SOURCES += src/motiontimelinewidget.cpp
-HEADERS += src/motiontimelinewidget.h
-
-SOURCES += src/interpolationtype.cpp
-HEADERS += src/interpolationtype.h
-
-SOURCES += src/motionclipwidget.cpp
-HEADERS += src/motionclipwidget.h
-
 SOURCES += src/tabwidget.cpp
 HEADERS += src/tabwidget.h
 
 SOURCES += src/flowlayout.cpp
 HEADERS += src/flowlayout.h
-
-SOURCES += src/shortcuts.cpp
-HEADERS += src/shortcuts.h
 
 SOURCES += src/trianglesourcenoderesolve.cpp
 HEADERS += src/trianglesourcenoderesolve.h
@@ -375,26 +332,11 @@ HEADERS += src/uvunwrap.h
 SOURCES += src/triangletangentresolve.cpp
 HEADERS += src/triangletangentresolve.h
 
-SOURCES += src/animalposer.cpp
-HEADERS += src/animalposer.h
-
-SOURCES += src/poserconstruct.cpp
-HEADERS += src/poserconstruct.h
-
 SOURCES += src/skeletondocument.cpp
 HEADERS += src/skeletondocument.h
 
-SOURCES += src/posedocument.cpp
-HEADERS += src/posedocument.h
-
 SOURCES += src/combinemode.cpp
 HEADERS += src/combinemode.h
-
-SOURCES += src/polycount.cpp
-HEADERS += src/polycount.h
-
-SOURCES += src/cutdocument.cpp
-HEADERS += src/cutdocument.h
 
 SOURCES += src/cutface.cpp
 HEADERS += src/cutface.h
@@ -404,12 +346,6 @@ HEADERS += src/parttarget.h
 
 SOURCES += src/partbase.cpp
 HEADERS += src/partbase.h
-
-SOURCES += src/cutfacewidget.cpp
-HEADERS += src/cutfacewidget.h
-
-SOURCES += src/cutfacelistwidget.cpp
-HEADERS += src/cutfacelistwidget.h
 
 SOURCES += src/preferences.cpp
 HEADERS += src/preferences.h
@@ -443,32 +379,17 @@ HEADERS += src/intnumberwidget.h
 SOURCES += src/imagepreviewwidget.cpp
 HEADERS += src/imagepreviewwidget.h
 
-SOURCES += src/mousepicker.cpp
-HEADERS += src/mousepicker.h
+SOURCES += src/texturepainter.cpp
+HEADERS += src/texturepainter.h
 
 SOURCES += src/paintmode.cpp
 HEADERS += src/paintmode.h
-
-SOURCES += src/ragdoll.cpp
-HEADERS += src/ragdoll.h
 
 SOURCES += src/proceduralanimation.cpp
 HEADERS += src/proceduralanimation.h
 
 SOURCES += src/boundingboxmesh.cpp
 HEADERS += src/boundingboxmesh.h
-
-SOURCES += src/gridmeshbuilder.cpp
-HEADERS += src/gridmeshbuilder.h
-
-SOURCES += src/regionfiller.cpp
-HEADERS += src/regionfiller.h
-
-SOURCES += src/cyclefinder.cpp
-HEADERS += src/cyclefinder.h
-
-SOURCES += src/shortestpath.cpp
-HEADERS += src/shortestpath.h
 
 SOURCES += src/meshwrapper.cpp
 HEADERS += src/meshwrapper.h
@@ -500,38 +421,83 @@ HEADERS += src/triangulatefaces.h
 SOURCES += src/booleanmesh.cpp
 HEADERS += src/booleanmesh.h
 
-SOURCES += src/imageskeletonextractor.cpp
-HEADERS += src/imageskeletonextractor.h
-
-SOURCES += src/contourtopartconverter.cpp
-HEADERS += src/contourtopartconverter.h
-
-SOURCES += src/remesher.cpp
-HEADERS += src/remesher.h
-
-SOURCES += src/clothsimulator.cpp
-HEADERS += src/clothsimulator.h
-
-SOURCES += src/componentlayer.cpp
-HEADERS += src/componentlayer.h
-
 SOURCES += src/isotropicremesh.cpp
 HEADERS += src/isotropicremesh.h
-
-SOURCES += src/clothforce.cpp
-HEADERS += src/clothforce.h
-
-SOURCES += src/projectfacestonodes.cpp
-HEADERS += src/projectfacestonodes.h
-
-SOURCES += src/simulateclothmeshes.cpp
-HEADERS += src/simulateclothmeshes.h
 
 SOURCES += src/ddsfile.cpp
 HEADERS += src/ddsfile.h
 
 SOURCES += src/fileforever.cpp
 HEADERS += src/fileforever.h
+
+SOURCES += src/partpreviewimagesgenerator.cpp
+HEADERS += src/partpreviewimagesgenerator.h
+
+SOURCES += src/remeshhole.cpp
+HEADERS += src/remeshhole.h
+
+SOURCES += src/centripetalcatmullromspline.cpp
+HEADERS += src/centripetalcatmullromspline.h
+
+SOURCES += src/simpleshadermesh.cpp
+HEADERS += src/simpleshadermesh.h
+
+SOURCES += src/simpleshadermeshbinder.cpp
+HEADERS += src/simpleshadermeshbinder.h
+
+SOURCES += src/simpleshaderwidget.cpp
+HEADERS += src/simpleshaderwidget.h
+
+SOURCES += src/blockmesh.cpp
+HEADERS += src/blockmesh.h
+
+SOURCES += src/planemesh.cpp
+HEADERS += src/planemesh.h
+
+SOURCES += src/hermitecurveinterpolation.cpp
+HEADERS += src/hermitecurveinterpolation.h
+
+SOURCES += src/genericspineandpseudophysics.cpp
+HEADERS += src/genericspineandpseudophysics.h
+
+SOURCES += src/chainsimulator.cpp
+HEADERS += src/chainsimulator.h
+
+SOURCES += src/vertebratamovemotionbuilder.cpp
+HEADERS += src/vertebratamovemotionbuilder.h
+
+SOURCES += src/simplerendermeshgenerator.cpp
+HEADERS += src/simplerendermeshgenerator.h
+
+SOURCES += src/motioneditwidget.cpp
+HEADERS += src/motioneditwidget.h
+
+SOURCES += src/vertebratamovemotionparameterswidget.cpp
+HEADERS += src/vertebratamovemotionparameterswidget.h
+
+SOURCES += src/objectxml.cpp
+HEADERS += src/objectxml.h
+
+SOURCES += src/rigxml.cpp
+HEADERS += src/rigxml.h
+
+SOURCES += src/ragdoll.cpp
+HEADERS += src/ragdoll.h
+
+SOURCES += src/motionbuilder.cpp
+HEADERS += src/motionbuilder.h
+
+SOURCES += src/statusbarlabel.cpp
+HEADERS += src/statusbarlabel.h
+
+SOURCES += src/silhouetteimagegenerator.cpp
+HEADERS += src/silhouetteimagegenerator.h
+
+SOURCES += src/bonedocument.cpp
+HEADERS += src/bonedocument.h
+
+SOURCES += src/materiallayer.cpp
+HEADERS += src/materiallayer.h
 
 SOURCES += src/main.cpp
 
@@ -562,214 +528,6 @@ win32 {
 	LIBS += -L$${SOURCE_ROOT}thirdparty/instant-meshes/build/RelWithDebInfo -linstant-meshes
 	LIBS += -L$${SOURCE_ROOT}thirdparty/instant-meshes/build/ext_build/tbb/RelWithDebInfo -ltbb
 }
-
-INCLUDEPATH += thirdparty/bullet3/src
-
-SOURCES += thirdparty/bullet3/src/LinearMath/btAlignedAllocator.cpp
-HEADERS += thirdparty/bullet3/src/LinearMath/btAlignedAllocator.h
-
-SOURCES += thirdparty/bullet3/src/BulletDynamics/Dynamics/btRigidBody.cpp
-HEADERS += thirdparty/bullet3/src/BulletDynamics/Dynamics/btRigidBody.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btCollisionObject.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btCollisionObject.h
-
-SOURCES += thirdparty/bullet3/src/LinearMath/btVector3.cpp
-HEADERS += thirdparty/bullet3/src/LinearMath/btVector3.h
-
-HEADERS += thirdparty/bullet3/src/LinearMath/btScalar.h
-
-SOURCES += thirdparty/bullet3/src/LinearMath/btSerializer.cpp
-HEADERS += thirdparty/bullet3/src/LinearMath/btSerializer.h
-
-SOURCES += thirdparty/bullet3/src/LinearMath/btQuickprof.cpp
-HEADERS += thirdparty/bullet3/src/LinearMath/btQuickprof.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btCollisionShape.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btCollisionShape.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btCapsuleShape.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btCapsuleShape.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btConvexShape.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btConvexShape.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btConvexInternalShape.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btConvexInternalShape.h
-
-SOURCES += thirdparty/bullet3/src/BulletDynamics/ConstraintSolver/btGeneric6DofConstraint.cpp
-HEADERS += thirdparty/bullet3/src/BulletDynamics/ConstraintSolver/btGeneric6DofConstraint.h
-
-SOURCES += thirdparty/bullet3/src/BulletDynamics/ConstraintSolver/btConeTwistConstraint.cpp
-HEADERS += thirdparty/bullet3/src/BulletDynamics/ConstraintSolver/btConeTwistConstraint.h
-
-SOURCES += thirdparty/bullet3/src/BulletDynamics/ConstraintSolver/btTypedConstraint.cpp
-HEADERS += thirdparty/bullet3/src/BulletDynamics/ConstraintSolver/btTypedConstraint.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btDefaultCollisionConfiguration.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btDefaultCollisionConfiguration.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/BroadphaseCollision/btDbvtBroadphase.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/BroadphaseCollision/btDbvtBroadphase.h
-
-SOURCES += thirdparty/bullet3/src/BulletDynamics/ConstraintSolver/btSequentialImpulseConstraintSolver.cpp
-HEADERS += thirdparty/bullet3/src/BulletDynamics/ConstraintSolver/btSequentialImpulseConstraintSolver.h
-
-SOURCES += thirdparty/bullet3/src/BulletDynamics/Dynamics/btDiscreteDynamicsWorld.cpp
-HEADERS += thirdparty/bullet3/src/BulletDynamics/Dynamics/btDiscreteDynamicsWorld.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btCollisionWorld.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btCollisionWorld.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btConvexCast.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btConvexCast.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btGjkConvexCast.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btGjkConvexCast.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btEmptyCollisionAlgorithm.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btEmptyCollisionAlgorithm.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btManifoldResult.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btManifoldResult.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btGjkPairDetector.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btGjkPairDetector.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btTriangleCallback.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btTriangleCallback.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/BroadphaseCollision/btCollisionAlgorithm.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/BroadphaseCollision/btCollisionAlgorithm.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btPersistentManifold.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btPersistentManifold.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btCollisionDispatcher.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btCollisionDispatcher.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/BroadphaseCollision/btDispatcher.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/BroadphaseCollision/btDispatcher.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btBvhTriangleMeshShape.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btBvhTriangleMeshShape.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btSubSimplexConvexCast.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btSubSimplexConvexCast.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btVoronoiSimplexSolver.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btVoronoiSimplexSolver.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btSimulationIslandManager.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btSimulationIslandManager.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btUnionFind.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btUnionFind.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btOptimizedBvh.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btOptimizedBvh.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btTriangleMeshShape.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btTriangleMeshShape.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btConvexConvexAlgorithm.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btConvexConvexAlgorithm.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btConcaveShape.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btConcaveShape.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/BroadphaseCollision/btQuantizedBvh.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/BroadphaseCollision/btQuantizedBvh.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btConvexPolyhedron.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btConvexPolyhedron.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btRaycastCallback.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btRaycastCallback.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btBoxBoxCollisionAlgorithm.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btBoxBoxCollisionAlgorithm.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btContinuousConvexCollision.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btContinuousConvexCollision.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btPolyhedralContactClipping.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btPolyhedralContactClipping.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btCompoundCollisionAlgorithm.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btCompoundCollisionAlgorithm.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/BroadphaseCollision/btOverlappingPairCache.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/BroadphaseCollision/btOverlappingPairCache.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btBoxBoxDetector.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btBoxBoxDetector.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btPolyhedralConvexShape.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btPolyhedralConvexShape.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btActivatingCollisionAlgorithm.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btActivatingCollisionAlgorithm.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btConvexPlaneCollisionAlgorithm.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btConvexPlaneCollisionAlgorithm.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btSphereSphereCollisionAlgorithm.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btSphereSphereCollisionAlgorithm.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btConvexConcaveCollisionAlgorithm.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btConvexConcaveCollisionAlgorithm.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btSphereTriangleCollisionAlgorithm.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btSphereTriangleCollisionAlgorithm.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btCompoundCompoundCollisionAlgorithm.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btCompoundCompoundCollisionAlgorithm.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/BroadphaseCollision/btDbvt.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/BroadphaseCollision/btDbvt.h
-
-SOURCES += thirdparty/bullet3/src/LinearMath/btGeometryUtil.cpp
-HEADERS += thirdparty/bullet3/src/LinearMath/btGeometryUtil.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btSdfCollisionShape.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btSdfCollisionShape.h
-
-SOURCES += thirdparty/bullet3/src/LinearMath/btConvexHullComputer.cpp
-HEADERS += thirdparty/bullet3/src/LinearMath/btConvexHullComputer.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/SphereTriangleDetector.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/SphereTriangleDetector.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btHashedSimplePairCache.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionDispatch/btHashedSimplePairCache.h
-
-SOURCES += thirdparty/bullet3/src/BulletDynamics/ConstraintSolver/btPoint2PointConstraint.cpp
-HEADERS += thirdparty/bullet3/src/BulletDynamics/ConstraintSolver/btPoint2PointConstraint.h
-
-SOURCES += thirdparty/bullet3/src/BulletDynamics/ConstraintSolver/btFixedConstraint.cpp
-HEADERS += thirdparty/bullet3/src/BulletDynamics/ConstraintSolver/btFixedConstraint.h
-
-SOURCES += thirdparty/bullet3/src/BulletDynamics/ConstraintSolver/btGeneric6DofSpring2Constraint.cpp
-HEADERS += thirdparty/bullet3/src/BulletDynamics/ConstraintSolver/btGeneric6DofSpring2Constraint.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btMiniSDF.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btMiniSDF.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btSphereShape.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btSphereShape.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btGjkEpaPenetrationDepthSolver.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btGjkEpaPenetrationDepthSolver.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btMinkowskiPenetrationDepthSolver.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btMinkowskiPenetrationDepthSolver.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btGjkEpa2.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/NarrowPhaseCollision/btGjkEpa2.h
-
-SOURCES += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btBoxShape.cpp
-HEADERS += thirdparty/bullet3/src/BulletCollision/CollisionShapes/btBoxShape.h
 
 INCLUDEPATH += thirdparty/quickjs/quickjs-2019-07-09-dust3d
 
@@ -862,10 +620,7 @@ win32 {
 
 	GMP_LIBNAME = libgmp-10
 	MPFR_LIBNAME = libmpfr-4
-	CGAL_LIBNAME = CGAL-vc140-mt-4.13
 	CGAL_INCLUDEDIR = $$CGAL_DIR\include
-	CGAL_BUILDINCLUDEDIR = $$CGAL_DIR\build\include
-	CGAL_LIBDIR = $$CGAL_DIR\build\lib\Release
 	GMP_INCLUDEDIR = $$CGAL_DIR\auxiliary\gmp\include
 	GMP_LIBDIR = $$CGAL_DIR\auxiliary\gmp\lib
 	MPFR_INCLUDEDIR = $$GMP_INCLUDEDIR
@@ -875,11 +630,8 @@ win32 {
 macx {
 	GMP_LIBNAME = gmp
 	MPFR_LIBNAME = mpfr
-	CGAL_LIBNAME = cgal
 	BOOST_INCLUDEDIR = /usr/local/opt/boost/include
 	CGAL_INCLUDEDIR = /usr/local/opt/cgal/include
-	CGAL_BUILDINCLUDEDIR = /usr/local/opt/cgal/include
-	CGAL_LIBDIR = /usr/local/opt/cgal/lib
 	GMP_INCLUDEDIR = /usr/local/opt/gmp/include
 	GMP_LIBDIR = /usr/local/opt/gmp/lib
 	MPFR_INCLUDEDIR = /usr/local/opt/mpfr/include
@@ -889,11 +641,8 @@ macx {
 unix:!macx {
 	GMP_LIBNAME = gmp
 	MPFR_LIBNAME = mpfr
-	CGAL_LIBNAME = CGAL
 	BOOST_INCLUDEDIR = /usr/local/include
 	CGAL_INCLUDEDIR = /usr/local/include
-	CGAL_BUILDINCLUDEDIR = /usr/local/include
-	CGAL_LIBDIR = /usr/local/lib
 	GMP_INCLUDEDIR = /usr/local/include
 	GMP_LIBDIR = /usr/local/lib
 	MPFR_INCLUDEDIR = /usr/local/include
@@ -909,8 +658,6 @@ INCLUDEPATH += $$MPFR_INCLUDEDIR
 LIBS += -L$$MPFR_LIBDIR -l$$MPFR_LIBNAME
 
 INCLUDEPATH += $$CGAL_INCLUDEDIR
-INCLUDEPATH += $$CGAL_BUILDINCLUDEDIR
-LIBS += -L$$CGAL_LIBDIR -l$$CGAL_LIBNAME
 
 target.path = ./
 INSTALLS += target

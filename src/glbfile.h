@@ -7,7 +7,7 @@
 #include <vector>
 #include <QQuaternion>
 #include <QImage>
-#include "outcome.h"
+#include "object.h"
 #include "json.hpp"
 #include "document.h"
 
@@ -15,11 +15,10 @@ class GlbFileWriter : public QObject
 {
     Q_OBJECT
 public:
-    GlbFileWriter(Outcome &outcome,
-        const std::vector<RiggerBone> *resultRigBones,
-        const std::map<int, RiggerVertexWeights> *resultRigWeights,
+    GlbFileWriter(Object &object,
+        const std::vector<RigBone> *resultRigBones,
+        const std::map<int, RigVertexWeights> *resultRigWeights,
         const QString &filename,
-        bool textureHasTransparencySettings,
         QImage *textureImage=nullptr,
         QImage *normalImage=nullptr,
         QImage *ormImage=nullptr,
@@ -27,9 +26,9 @@ public:
     bool save();
 private:
     QString m_filename;
-    bool m_outputNormal;
-    bool m_outputAnimation;
-    bool m_outputUv;
+    bool m_outputNormal = true;
+    bool m_outputAnimation = true;
+    bool m_outputUv = true;
     QByteArray m_binByteArray;
     QByteArray m_jsonByteArray;
 private:

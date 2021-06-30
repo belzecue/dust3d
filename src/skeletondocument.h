@@ -1,4 +1,3 @@
-
 #ifndef DUST3D_SKELETON_DOCUMENT_H
 #define DUST3D_SKELETON_DOCUMENT_H
 #include <QUuid>
@@ -7,6 +6,7 @@
 #include <cmath>
 #include <QImage>
 #include <QByteArray>
+#include <QDebug>
 #include "bonemark.h"
 #include "theme.h"
 #include "model.h"
@@ -32,8 +32,8 @@ public:
     }
     void setRadius(float toRadius)
     {
-        if (toRadius < 0.005)
-            toRadius = 0.005;
+        if (toRadius < 0.005f)
+            toRadius = 0.005f;
         else if (toRadius > 1)
             toRadius = 1;
         radius = toRadius;
@@ -164,6 +164,7 @@ public:
     PartBase base;
     float deformThickness;
     float deformWidth;
+    bool deformUnified;
     bool rounded;
     bool chamfered;
     QColor color;
@@ -177,12 +178,16 @@ public:
     QUuid materialId;
     PartTarget target;
     float colorSolubility;
+    float metalness;
+    float roughness;
     float deformMapScale;
     QUuid deformMapImageId;
     float hollowThickness;
     bool countershaded;
-    bool gridded;
     QUuid fillMeshLinkedId;
+    bool isPreviewMeshObsolete;
+    QPixmap previewPixmap;
+    bool smooth;
     SkeletonPart(const QUuid &withId=QUuid()) :
         visible(true),
         locked(false),
@@ -193,6 +198,7 @@ public:
         base(PartBase::Average),
         deformThickness(1.0),
         deformWidth(1.0),
+        deformUnified(false),
         rounded(false),
         chamfered(false),
         color(Preferences::instance().partColor()),
@@ -202,16 +208,23 @@ public:
         cutFace(CutFace::Quad),
         target(PartTarget::Model),
         colorSolubility(0.0),
+        metalness(0.0),
+        roughness(1.0),
         deformMapScale(1.0),
         hollowThickness(0.0),
         countershaded(false),
-        gridded(false)
+        isPreviewMeshObsolete(false),
+        smooth(true)
     {
         id = withId.isNull() ? QUuid::createUuid() : withId;
     }
     bool hasPolyFunction() const
     {
         return PartTarget::Model == target;
+    }
+    bool hasSmoothFunction() const
+    {
+        return PartTarget::Model == target && fillMeshLinkedId.isNull();
     }
     bool hasSubdivFunction() const
     {
@@ -317,7 +330,7 @@ public:
     }
     bool deformAdjusted() const
     {
-        return deformThicknessAdjusted() || deformWidthAdjusted();
+        return deformThicknessAdjusted() || deformWidthAdjusted() || deformUnified;
     }
     bool deformMapScaleAdjusted() const
     {
@@ -330,6 +343,14 @@ public:
     bool colorSolubilityAdjusted() const
     {
         return fabs(colorSolubility - 0.0) >= 0.01;
+    }
+    bool metalnessAdjusted() const
+    {
+        return fabs(metalness - 0.0) >= 0.01;
+    }
+    bool roughnessAdjusted() const
+    {
+        return fabs(roughness - 1.0) >= 0.01;
     }
     bool cutRotationAdjusted() const
     {
@@ -379,11 +400,17 @@ public:
         target = other.target;
         colorSolubility = other.colorSolubility;
         countershaded = other.countershaded;
+        metalness = other.metalness;
+        roughness = other.roughness;
+        deformUnified = other.deformUnified;
+        smooth = other.smooth;
+        hollowThickness = other.hollowThickness;
     }
     void updatePreviewMesh(Model *previewMesh)
     {
         delete m_previewMesh;
         m_previewMesh = previewMesh;
+        isPreviewMeshObsolete = true;
     }
     Model *takePreviewMesh() const
     {
@@ -400,7 +427,6 @@ enum class SkeletonDocumentEditMode
 {
     Add = 0,
     Select,
-    Mark,
     Paint,
     Drag,
     ZoomIn,
@@ -414,9 +440,151 @@ enum class SkeletonProfile
     Side
 };
 
+class SkeletonComponent
+{
+public:
+    SkeletonComponent()
+    {
+    }
+    SkeletonComponent(const QUuid &withId, const QString &linkData=QString(), const QString &linkDataType=QString())
+    {
+        id = withId.isNull() ? QUuid::createUuid() : withId;
+        if (!linkData.isEmpty()) {
+            if ("partId" == linkDataType) {
+                linkToPartId = QUuid(linkData);
+            }
+        }
+    }
+    QUuid id;
+    QString name;
+    QUuid linkToPartId;
+    QUuid parentId;
+    bool expanded = true;
+    CombineMode combineMode = Preferences::instance().componentCombineMode();
+    bool dirty = true;
+    std::vector<QUuid> childrenIds;
+    QString linkData() const
+    {
+        return linkToPartId.isNull() ? QString() : linkToPartId.toString();
+    }
+    QString linkDataType() const
+    {
+        return linkToPartId.isNull() ? QString() : QString("partId");
+    }
+    void addChild(QUuid childId)
+    {
+        if (m_childrenIdSet.find(childId) != m_childrenIdSet.end())
+            return;
+        m_childrenIdSet.insert(childId);
+        childrenIds.push_back(childId);
+    }
+    void removeChild(QUuid childId)
+    {
+        if (m_childrenIdSet.find(childId) == m_childrenIdSet.end())
+            return;
+        m_childrenIdSet.erase(childId);
+        auto findResult = std::find(childrenIds.begin(), childrenIds.end(), childId);
+        if (findResult != childrenIds.end())
+            childrenIds.erase(findResult);
+    }
+    void replaceChild(QUuid childId, QUuid newId)
+    {
+        if (m_childrenIdSet.find(childId) == m_childrenIdSet.end())
+            return;
+        if (m_childrenIdSet.find(newId) != m_childrenIdSet.end())
+            return;
+        m_childrenIdSet.erase(childId);
+        m_childrenIdSet.insert(newId);
+        auto findResult = std::find(childrenIds.begin(), childrenIds.end(), childId);
+        if (findResult != childrenIds.end())
+            *findResult = newId;
+    }
+    void moveChildUp(QUuid childId)
+    {
+        auto it = std::find(childrenIds.begin(), childrenIds.end(), childId);
+        if (it == childrenIds.end()) {
+            qDebug() << "Child not found in list:" << childId;
+            return;
+        }
+        
+        auto index = std::distance(childrenIds.begin(), it);
+        if (index == 0)
+            return;
+        std::swap(childrenIds[index - 1], childrenIds[index]);
+    }
+    void moveChildDown(QUuid childId)
+    {
+        auto it = std::find(childrenIds.begin(), childrenIds.end(), childId);
+        if (it == childrenIds.end()) {
+            qDebug() << "Child not found in list:" << childId;
+            return;
+        }
+        
+        auto index = std::distance(childrenIds.begin(), it);
+        if (index == (int)childrenIds.size() - 1)
+            return;
+        std::swap(childrenIds[index], childrenIds[index + 1]);
+    }
+    void moveChildToTop(QUuid childId)
+    {
+        auto it = std::find(childrenIds.begin(), childrenIds.end(), childId);
+        if (it == childrenIds.end()) {
+            qDebug() << "Child not found in list:" << childId;
+            return;
+        }
+        
+        auto index = std::distance(childrenIds.begin(), it);
+        if (index == 0)
+            return;
+        for (int i = index; i >= 1; i--)
+            std::swap(childrenIds[i - 1], childrenIds[i]);
+    }
+    void moveChildToBottom(QUuid childId)
+    {
+        auto it = std::find(childrenIds.begin(), childrenIds.end(), childId);
+        if (it == childrenIds.end()) {
+            qDebug() << "Child not found in list:" << childId;
+            return;
+        }
+        
+        auto index = std::distance(childrenIds.begin(), it);
+        if (index == (int)childrenIds.size() - 1)
+            return;
+        for (int i = index; i <= (int)childrenIds.size() - 2; i++)
+            std::swap(childrenIds[i], childrenIds[i + 1]);
+    }
+private:
+    std::set<QUuid> m_childrenIdSet;
+};
+
 class SkeletonDocument : public QObject
 {
     Q_OBJECT
+signals:
+    void partAdded(QUuid partId);
+    void nodeAdded(QUuid nodeId);
+    void edgeAdded(QUuid edgeId);
+    void partRemoved(QUuid partId);
+    void partLockStateChanged(QUuid partId);
+    void partVisibleStateChanged(QUuid partId);
+    void partDisableStateChanged(QUuid partId);
+    void componentNameChanged(QUuid componentId);
+    void componentChildrenChanged(QUuid componentId);
+    void componentRemoved(QUuid componentId);
+    void componentAdded(QUuid componentId);
+    void componentExpandStateChanged(QUuid componentId);
+    void nodeRemoved(QUuid nodeId);
+    void edgeRemoved(QUuid edgeId);
+    void nodeRadiusChanged(QUuid nodeId);
+    void nodeOriginChanged(QUuid nodeId);
+    void edgeReversed(QUuid edgeId);
+    void originChanged();
+    void skeletonChanged();
+    void optionsChanged();
+    void xlockStateChanged();
+    void ylockStateChanged();
+    void zlockStateChanged();
+    void radiusLockStateChanged();
 public:
     SkeletonDocumentEditMode editMode = SkeletonDocumentEditMode::Select;
     bool xlocked = false;
@@ -428,6 +596,8 @@ public:
     std::map<QUuid, SkeletonPart> partMap;
     std::map<QUuid, SkeletonNode> nodeMap;
     std::map<QUuid, SkeletonEdge> edgeMap;
+    std::map<QUuid, SkeletonComponent> componentMap;
+    SkeletonComponent rootComponent;
 
     const SkeletonNode *findNode(QUuid nodeId) const;
     const SkeletonEdge *findEdge(QUuid edgeId) const;
@@ -435,6 +605,13 @@ public:
     const SkeletonEdge *findEdgeByNodes(QUuid firstNodeId, QUuid secondNodeId) const;
     void findAllNeighbors(QUuid nodeId, std::set<QUuid> &neighbors) const;
     bool isNodeConnectable(QUuid nodeId) const;
+    const SkeletonComponent *findComponent(QUuid componentId) const;
+    const SkeletonComponent *findComponentParent(QUuid componentId) const;
+    QUuid findComponentParentId(QUuid componentId) const;
+    void collectComponentDescendantParts(QUuid componentId, std::vector<QUuid> &partIds) const;
+    void collectComponentDescendantComponents(QUuid componentId, std::vector<QUuid> &componentIds) const;
+    void resetDirtyFlags();
+    void markAllDirty();
     
     virtual bool undoable() const = 0;
     virtual bool redoable() const = 0;
@@ -500,11 +677,75 @@ public slots:
     virtual void undo() = 0;
     virtual void redo() = 0;
     virtual void paste() = 0;
+
+    void removeNode(QUuid nodeId);
+    void removeEdge(QUuid edgeId);
+    void removePart(QUuid partId);
+    void addNodeWithId(QUuid nodeId, float x, float y, float z, float radius, QUuid fromNodeId);
+    void addNode(float x, float y, float z, float radius, QUuid fromNodeId);
+    void scaleNodeByAddRadius(QUuid nodeId, float amount);
+    void moveNodeBy(QUuid nodeId, float x, float y, float z);
+    void setNodeOrigin(QUuid nodeId, float x, float y, float z);
+    void setNodeRadius(QUuid nodeId, float radius);
+    void switchNodeXZ(QUuid nodeId);
+    void moveOriginBy(float x, float y, float z);
+    void addEdge(QUuid fromNodeId, QUuid toNodeId);
+    void moveComponentUp(QUuid componentId);
+    void moveComponentDown(QUuid componentId);
+    void moveComponentToTop(QUuid componentId);
+    void moveComponentToBottom(QUuid componentId);
+    void renameComponent(QUuid componentId, QString name);
+    void removeComponent(QUuid componentId);
+    void addComponent(QUuid parentId);
+    void moveComponent(QUuid componentId, QUuid toParentId);
+    void setCurrentCanvasComponentId(QUuid componentId);
+    void createNewComponentAndMoveThisIn(QUuid componentId);
+    void createNewChildComponent(QUuid parentComponentId);
+    void setComponentExpandState(QUuid componentId, bool expanded);
+    void hideOtherComponents(QUuid componentId);
+    void lockOtherComponents(QUuid componentId);
+    void hideAllComponents();
+    void showAllComponents();
+    void showOrHideAllComponents();
+    void collapseAllComponents();
+    void expandAllComponents();
+    void lockAllComponents();
+    void unlockAllComponents();
+    void hideDescendantComponents(QUuid componentId);
+    void showDescendantComponents(QUuid componentId);
+    void lockDescendantComponents(QUuid componentId);
+    void unlockDescendantComponents(QUuid componentId);
+    void setPartLockState(QUuid partId, bool locked);
+    void setPartVisibleState(QUuid partId, bool visible);
+    void setPartDisableState(QUuid partId, bool disabled);
+    void enableAllPositionRelatedLocks();
+    void disableAllPositionRelatedLocks();
+    bool isPartReadonly(QUuid partId) const;
+    void breakEdge(QUuid edgeId);
+    void reduceNode(QUuid nodeId);
+    void reverseEdge(QUuid edgeId);
+    void setXlockState(bool locked);
+    void setYlockState(bool locked);
+    void setZlockState(bool locked);
+    void setRadiusLockState(bool locked);
     
 private:
     float m_originX = 0;
     float m_originY = 0;
     float m_originZ = 0;
+    
+    QUuid m_currentCanvasComponentId;
+    bool m_allPositionRelatedLocksEnabled = true;
+    
+    void splitPartByNode(std::vector<std::vector<QUuid>> *groups, QUuid nodeId);
+    void joinNodeAndNeiborsToGroup(std::vector<QUuid> *group, QUuid nodeId, std::set<QUuid> *visitMap, QUuid noUseEdgeId=QUuid());
+    void splitPartByEdge(std::vector<std::vector<QUuid>> *groups, QUuid edgeId);
+    void removePartDontCareComponent(QUuid partId);
+    void addPartToComponent(QUuid partId, QUuid componentId);
+    bool isDescendantComponent(QUuid componentId, QUuid suspiciousId);
+    void removeComponentRecursively(QUuid componentId);
+    void updateLinkedPart(QUuid oldPartId, QUuid newPartId);
+    QUuid createNode(QUuid nodeId, float x, float y, float z, float radius, QUuid fromNodeId);
 };
 
 #endif

@@ -30,6 +30,7 @@ ModelMeshBinder::~ModelMeshBinder()
     delete m_newToonDepthMap;
     delete m_currentToonNormalMap;
     delete m_currentToonDepthMap;
+    delete m_colorTextureImage;
 }
 
 void ModelMeshBinder::updateMesh(Model *mesh)
@@ -40,6 +41,13 @@ void ModelMeshBinder::updateMesh(Model *mesh)
         m_newMesh = mesh;
         m_newMeshComing = true;
     }
+}
+
+void ModelMeshBinder::updateColorTexture(QImage *colorTextureImage)
+{
+    QMutexLocker lock(&m_colorTextureMutex);
+    delete m_colorTextureImage;
+    m_colorTextureImage = colorTextureImage;
 }
 
 void ModelMeshBinder::reloadMesh()
@@ -156,18 +164,22 @@ void ModelMeshBinder::paint(ModelShaderProgram *program)
                         (m_hasMetalnessMap || m_hasRoughnessMap || m_hasAmbientOcclusionMap))
                     m_metalnessRoughnessAmbientOcclusionMap = new QOpenGLTexture(*m_mesh->metalnessRoughnessAmbientOcclusionImage());
                 
-                delete m_environmentIrradianceMap;
-                m_environmentIrradianceMap = nullptr;
-                delete m_environmentSpecularMap;
-                m_environmentSpecularMap = nullptr;
+                //delete m_environmentIrradianceMap;
+                //m_environmentIrradianceMap = nullptr;
+                //delete m_environmentSpecularMap;
+                //m_environmentSpecularMap = nullptr;
                 if (program->isCoreProfile() && 
-                        m_environmentLightEnabled &&
-                        (m_hasMetalnessMap || m_hasRoughnessMap)) {
-                    DdsFileReader irradianceFile(":/resources/cedar_bridge_irradiance.dds");
-                    m_environmentIrradianceMap = irradianceFile.createOpenGLTexture();
+                        m_environmentLightEnabled/* &&
+                        (m_hasMetalnessMap || m_hasRoughnessMap)*/) {
+                    if (nullptr == m_environmentIrradianceMap) {
+                        DdsFileReader irradianceFile(":/resources/cedar_bridge_irradiance.dds");
+                        m_environmentIrradianceMap = irradianceFile.createOpenGLTexture();
+                    }
                     
-                    DdsFileReader specularFile(":/resources/cedar_bridge_specular.dds");
-                    m_environmentSpecularMap = specularFile.createOpenGLTexture();
+                    if (nullptr == m_environmentSpecularMap) {
+                        DdsFileReader specularFile(":/resources/cedar_bridge_specular.dds");
+                        m_environmentSpecularMap = specularFile.createOpenGLTexture();
+                    }
                 }
                 
                 {
@@ -290,6 +302,15 @@ void ModelMeshBinder::paint(ModelShaderProgram *program)
         QOpenGLVertexArrayObject::Binder vaoBinder(&m_vaoTriangle);
 		QOpenGLFunctions *f = QOpenGLContext::currentContext()->functions();
         if (m_hasTexture) {
+            {
+                QMutexLocker lock(&m_colorTextureMutex);
+                if (m_colorTextureImage) {
+                    delete m_texture;
+                    m_texture = new QOpenGLTexture(*m_colorTextureImage);
+                    delete m_colorTextureImage;
+                    m_colorTextureImage = nullptr;
+                }
+            }
             if (m_texture)
                 m_texture->bind(0);
             program->setUniformValue(program->textureEnabledLoc(), 1);

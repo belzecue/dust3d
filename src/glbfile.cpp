@@ -22,26 +22,22 @@
 
 bool GlbFileWriter::m_enableComment = false;
 
-GlbFileWriter::GlbFileWriter(Outcome &outcome,
-        const std::vector<RiggerBone> *resultRigBones,
-        const std::map<int, RiggerVertexWeights> *resultRigWeights,
+GlbFileWriter::GlbFileWriter(Object &object,
+        const std::vector<RigBone> *resultRigBones,
+        const std::map<int, RigVertexWeights> *resultRigWeights,
         const QString &filename,
-        bool textureHasTransparencySettings,
         QImage *textureImage,
         QImage *normalImage,
         QImage *ormImage,
         const std::vector<std::pair<QString, std::vector<std::pair<float, JointNodeTree>>>> *motions) :
-    m_filename(filename),
-    m_outputNormal(true),
-    m_outputAnimation(true),
-    m_outputUv(true)
+    m_filename(filename)
 {
-    const std::vector<std::vector<QVector3D>> *triangleVertexNormals = outcome.triangleVertexNormals();
+    const std::vector<std::vector<QVector3D>> *triangleVertexNormals = object.triangleVertexNormals();
     if (m_outputNormal) {
         m_outputNormal = nullptr != triangleVertexNormals;
     }
     
-    const std::vector<std::vector<QVector2D>> *triangleVertexUvs = outcome.triangleVertexUvs();
+    const std::vector<std::vector<QVector2D>> *triangleVertexUvs = object.triangleVertexUvs();
     if (m_outputUv) {
         m_outputUv = nullptr != triangleVertexUvs;
     }
@@ -92,20 +88,22 @@ GlbFileWriter::GlbFileWriter(Outcome &outcome,
         m_json["nodes"][1]["skin"] = 0;
         
         m_json["skins"][0]["joints"] = {};
+        const QQuaternion noneRotation;
         for (size_t i = 0; i < boneNodes.size(); i++) {
+            const auto &bone = (*resultRigBones)[i];
             m_json["skins"][0]["joints"] += skeletonNodeStartIndex + i;
             
             m_json["nodes"][skeletonNodeStartIndex + i]["name"] = boneNodes[i].name.toUtf8().constData();
             m_json["nodes"][skeletonNodeStartIndex + i]["translation"] = {
-                boneNodes[i].translation.x(),
-                boneNodes[i].translation.y(),
-                boneNodes[i].translation.z()
+                boneNodes[i].bindTranslation.x(),
+                boneNodes[i].bindTranslation.y(),
+                boneNodes[i].bindTranslation.z()
             };
             m_json["nodes"][skeletonNodeStartIndex + i]["rotation"] = {
-                boneNodes[i].rotation.x(),
-                boneNodes[i].rotation.y(),
-                boneNodes[i].rotation.z(),
-                boneNodes[i].rotation.scalar()
+                noneRotation.x(),
+                noneRotation.y(),
+                noneRotation.z(),
+                noneRotation.scalar()
             };
             
             if (!boneNodes[i].children.empty()) {
@@ -144,10 +142,10 @@ GlbFileWriter::GlbFileWriter(Outcome &outcome,
 
     std::vector<QVector3D> triangleVertexPositions;
     std::vector<size_t> triangleVertexOldIndices;
-    for (const auto &triangleIndices: outcome.triangles) {
+    for (const auto &triangleIndices: object.triangles) {
         for (size_t j = 0; j < 3; ++j) {
             triangleVertexOldIndices.push_back(triangleIndices[j]);
-            triangleVertexPositions.push_back(outcome.vertices[triangleIndices[j]]);
+            triangleVertexPositions.push_back(object.vertices[triangleIndices[j]]);
         }
     }
 
@@ -170,7 +168,7 @@ GlbFileWriter::GlbFileWriter(Outcome &outcome,
         m_json["materials"][primitiveIndex]["pbrMetallicRoughness"]["baseColorTexture"]["index"] = textureIndex++;
         m_json["materials"][primitiveIndex]["pbrMetallicRoughness"]["metallicFactor"] = Model::m_defaultMetalness;
         m_json["materials"][primitiveIndex]["pbrMetallicRoughness"]["roughnessFactor"] = Model::m_defaultRoughness;
-        if (textureHasTransparencySettings)
+        if (object.alphaEnabled)
             m_json["materials"][primitiveIndex]["alphaMode"] = "BLEND";
         if (normalImage) {
             m_json["materials"][primitiveIndex]["normalTexture"]["index"] = textureIndex++;

@@ -6,16 +6,17 @@
 #include <QMatrix4x4>
 #include <QQuaternion>
 #include <QImage>
-#include "outcome.h"
-#include "document.h"
+#include "object.h"
+#include "rig.h"
+#include "jointnodetree.h"
 
 class FbxFileWriter : public QObject
 {
     Q_OBJECT
 public:
-    FbxFileWriter(Outcome &outcome,
-        const std::vector<RiggerBone> *resultRigBones,
-        const std::map<int, RiggerVertexWeights> *resultRigWeights,
+    FbxFileWriter(Object &object,
+        const std::vector<RigBone> *resultRigBones,
+        const std::map<int, RigVertexWeights> *resultRigWeights,
         const QString &filename,
         QImage *textureImage=nullptr,
         QImage *normalImage=nullptr,

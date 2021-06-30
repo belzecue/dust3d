@@ -10,18 +10,24 @@
 #include <map>
 #include <QStringList>
 #include <QLabel>
-#include "document.h"
+#include <QShortcut>
 #include "modelwidget.h"
-#include "exportpreviewwidget.h"
 #include "rigwidget.h"
 #include "bonemark.h"
-#include "posemanagewidget.h"
 #include "preferenceswidget.h"
 #include "graphicscontainerwidget.h"
 #include "normalanddepthmapsgenerator.h"
 #include "autosaver.h"
+#include "partpreviewimagesgenerator.h"
+#include "QtColorWidgets/ColorWheel"
 
+class Document;
 class SkeletonGraphicsWidget;
+class PartTreeWidget;
+class SpinnableAwesomeButton;
+class SilhouetteImageGenerator;
+class BoneDocument;
+class Snapshot;
 
 class DocumentWindow : public QMainWindow
 {
@@ -31,10 +37,19 @@ signals:
     void uninialized();
     void waitingExportFinished(const QString &filename, bool isSuccessful);
     void mouseTargetVertexPositionChanged(const QVector3D &position);
+    void graphicsViewEditTargetChanged();
 public:
+    enum class GraphicsViewEditTarget
+    {
+        Shape,
+        Bone
+    };
+
     DocumentWindow();
     ~DocumentWindow();
     Document *document();
+    ModelWidget *modelWidget();
+    GraphicsViewEditTarget graphicsViewEditTarget();
     static DocumentWindow *createDocumentWindow();
     static const std::map<DocumentWindow *, QUuid> &documentWindows();
     static void showAcknowlegements();
@@ -57,7 +72,8 @@ public slots:
     void exportObjResult();
     void exportGlbResult();
     void exportFbxResult();
-    void showExportPreview();
+    void exportTextures();
+    void exportDs3objResult();
     void newWindow();
     void newDocument();
     void saveAs();
@@ -88,133 +104,109 @@ public slots:
     void exportObjToFilename(const QString &filename);
     void exportFbxToFilename(const QString &filename);
     void exportGlbToFilename(const QString &filename);
+    void exportTexturesToDirectory(const QString &directory);
+    void exportDs3objToFilename(const QString &filename);
     void toggleRotation();
-    //void updateInfoWidgetPosition();
     void generateNormalAndDepthMaps();
     void delayedGenerateNormalAndDepthMaps();
     void normalAndDepthMapsReady();
     void autoRecover();
     void import();
     void importPath(const QString &filename);
+    void generatePartPreviewImages();
+    void partPreviewImagesReady();
+    void updateRegenerateIcon();
+    void updateGraphicsViewEditTarget(GraphicsViewEditTarget target);
+    void generateSilhouetteImage();
+    void silhouetteImageReady();
+    void openRecentFile();
+    void updateRecentFileActions();
 private:
-    void initLockButton(QPushButton *button);
+    void initializeLockButton(QPushButton *button);
     void setCurrentFilename(const QString &filename);
     void updateTitle();
     void createPartSnapshotForFillMesh(const QUuid &fillMeshFileId, Snapshot *snapshot);
+    void initializeShortcuts();
+    void initializeToolShortcuts(SkeletonGraphicsWidget *graphicsWidget);
+    void initializeCanvasShortcuts(SkeletonGraphicsWidget *graphicsWidget);
+    QShortcut *createShortcut(QKeySequence key);
+    QString strippedName(const QString &fullFileName);
 private:
-    Document *m_document;
-    bool m_firstShow;
-    bool m_documentSaved;
-    ExportPreviewWidget *m_exportPreviewWidget;
-    PreferencesWidget *m_preferencesWidget;
+    Document *m_document = nullptr;
+    BoneDocument *m_boneDocument = nullptr;
+    bool m_firstShow = true;
+    bool m_documentSaved = true;
+    PreferencesWidget *m_preferencesWidget = nullptr;
     std::vector<QWidget *> m_dialogs;
-    bool m_isLastMeshGenerationSucceed;
-    quint64 m_currentUpdatedMeshId;
+    bool m_isLastMeshGenerationSucceed = true;
+    quint64 m_currentUpdatedMeshId = 0;
     QStringList m_waitingForExportToFilenames;
+    color_widgets::ColorWheel *m_colorWheelWidget = nullptr;
 private:
     QString m_currentFilename;
     
-    ModelWidget *m_modelRenderWidget;
-    SkeletonGraphicsWidget *m_graphicsWidget;
-    RigWidget *m_rigWidget;
-    //QLabel *m_infoWidget;
-    GraphicsContainerWidget *m_graphicsContainerWidget;
+    ModelWidget *m_modelRenderWidget = nullptr;
+    SkeletonGraphicsWidget *m_shapeGraphicsWidget = nullptr;
+    SkeletonGraphicsWidget *m_boneGraphicsWidget = nullptr;
+    RigWidget *m_rigWidget = nullptr;
+    GraphicsContainerWidget *m_graphicsContainerWidget = nullptr;
     
-    QMenu *m_fileMenu;
-    QAction *m_newWindowAction;
-    QAction *m_newDocumentAction;
-    QAction *m_openAction;
-    QMenu *m_openExampleMenu;
-    //QAction *m_openExampleAction;
-    QAction *m_saveAction;
-    QAction *m_saveAsAction;
-    QAction *m_saveAllAction;
-    QAction *m_showPreferencesAction;
-    QMenu *m_exportMenu;
-    QAction *m_changeTurnaroundAction;
-    QAction *m_quitAction;
+    QMenu *m_fileMenu = nullptr;
+    QAction *m_newWindowAction = nullptr;
+    QAction *m_newDocumentAction = nullptr;
+    QAction *m_openAction = nullptr;
+    QMenu *m_openExampleMenu = nullptr;
+    QAction *m_saveAction = nullptr;
+    QAction *m_saveAsAction = nullptr;
+    QAction *m_saveAllAction = nullptr;
+    QAction *m_showPreferencesAction = nullptr;
+    QAction *m_changeTurnaroundAction = nullptr;
+    std::vector<QAction *> m_recentFileActions;
+    QAction *m_recentFileSeparatorAction = nullptr;
+    QAction *m_quitAction = nullptr;
     
-    QAction *m_importAction;
+    QAction *m_importAction = nullptr;
     
-    QAction *m_exportAsObjAction;
-    QAction *m_exportAsObjPlusMaterialsAction;
-    QAction *m_exportAction;
-    QAction *m_exportRenderedAsImageAction;
+    QAction *m_exportAsObjAction = nullptr;
+    QAction *m_exportAsGlbAction = nullptr;
+    QAction *m_exportAsFbxAction = nullptr;
+    QAction *m_exportTexturesAction = nullptr;
+    QAction *m_exportDs3objAction = nullptr;
+    QAction *m_exportRenderedAsImageAction = nullptr;
     
-    QMenu *m_editMenu;
-    QAction *m_addAction;
-    QAction *m_undoAction;
-    QAction *m_redoAction;
-    QAction *m_deleteAction;
-    QAction *m_breakAction;
-    QAction *m_reverseAction;
-    QAction *m_connectAction;
-    QAction *m_cutAction;
-    QAction *m_copyAction;
-    QAction *m_pasteAction;
-    QAction *m_flipHorizontallyAction;
-    QAction *m_flipVerticallyAction;
-    QAction *m_rotateClockwiseAction;
-    QAction *m_rotateCounterclockwiseAction;
-    QAction *m_switchXzAction;
-    QAction *m_setCutFaceAction;
-    QAction *m_clearCutFaceAction;
-    QAction *m_createWrapPartsAction;
-    
-    QMenu *m_alignToMenu;
-    QAction *m_alignToGlobalCenterAction;
-    QAction *m_alignToGlobalVerticalCenterAction;
-    QAction *m_alignToGlobalHorizontalCenterAction;
-    QAction *m_alignToLocalCenterAction;
-    QAction *m_alignToLocalVerticalCenterAction;
-    QAction *m_alignToLocalHorizontalCenterAction;
-    
-    QAction *m_selectAllAction;
-    QAction *m_selectPartAllAction;
-    QAction *m_unselectAllAction;
-    
-    QMenu *m_markAsMenu;
-    QAction *m_markAsNoneAction;
-    QAction *m_markAsActions[(int)BoneMark::Count - 1];
-    
-    QMenu *m_colorizeAsMenu;
-    QAction *m_colorizeAsBlankAction;
-    QAction *m_colorizeAsAutoAction;
-    
-    QMenu *m_viewMenu;
-    //QAction *m_resetModelWidgetPosAction;
-    QAction *m_toggleWireframeAction;
-    QAction *m_toggleUvCheckAction;
-    QAction *m_toggleRotationAction;
-    QAction *m_toggleColorAction;
+    QMenu *m_viewMenu = nullptr;
+    QAction *m_toggleWireframeAction = nullptr;
+    QAction *m_toggleUvCheckAction = nullptr;
+    QAction *m_toggleRotationAction = nullptr;
+    QAction *m_toggleColorAction = nullptr;
     bool m_modelRemoveColor = false;
     
-    QMenu *m_windowMenu;
-    QAction *m_showPartsListAction;
-    QAction *m_showDebugDialogAction;
-    QAction *m_showMaterialsAction;
-    QAction *m_showRigAction;
-    QAction *m_showPosesAction;
-    QAction *m_showMotionsAction;
-    QAction *m_showScriptAction;
+    QMenu *m_windowMenu = nullptr;
+    QAction *m_showPartsListAction = nullptr;
+    QAction *m_showDebugDialogAction = nullptr;
+    QAction *m_showMaterialsAction = nullptr;
+    QAction *m_showRigAction = nullptr;
+    QAction *m_showMotionsAction = nullptr;
+    QAction *m_showPaintAction = nullptr;
+    QAction *m_showScriptAction = nullptr;
     
-    QMenu *m_helpMenu;
-    QAction *m_gotoHomepageAction;
-    QAction *m_viewSourceAction;
-    QAction *m_aboutAction;
-    QAction *m_checkForUpdatesAction;
-    QAction *m_reportIssuesAction;
-    QAction *m_seeContributorsAction;
-    QAction *m_seeSupportersAction;
-    QAction *m_seeAcknowlegementsAction;
-    QAction *m_seeReferenceGuideAction;
+    QMenu *m_helpMenu = nullptr;
+    QAction *m_gotoHomepageAction = nullptr;
+    QAction *m_viewSourceAction = nullptr;
+    QAction *m_aboutAction = nullptr;
+    QAction *m_checkForUpdatesAction = nullptr;
+    QAction *m_reportIssuesAction = nullptr;
+    QAction *m_seeContributorsAction = nullptr;
+    QAction *m_seeSupportersAction = nullptr;
+    QAction *m_seeAcknowlegementsAction = nullptr;
+    QAction *m_seeReferenceGuideAction = nullptr;
     
-    QPushButton *m_rotationButton;
+    QPushButton *m_rotationButton = nullptr;
 
-    QPushButton *m_xlockButton;
-    QPushButton *m_ylockButton;
-    QPushButton *m_zlockButton;
-    QPushButton *m_radiusLockButton;
+    QPushButton *m_xlockButton = nullptr;
+    QPushButton *m_ylockButton = nullptr;
+    QPushButton *m_zlockButton = nullptr;
+    QPushButton *m_radiusLockButton = nullptr;
     
     QMetaObject::Connection m_partListDockerVisibleSwitchConnection;
     
@@ -222,6 +214,21 @@ private:
     bool m_isNormalAndDepthMapsObsolete = false;
     
     AutoSaver *m_autoSaver = nullptr;
+    
+    PartPreviewImagesGenerator *m_partPreviewImagesGenerator = nullptr;
+    bool m_isPartPreviewImagesObsolete = false;
+    
+    PartTreeWidget *m_partTreeWidget = nullptr;
+    
+    SpinnableAwesomeButton *m_regenerateButton = nullptr;
+    
+    QWidget *m_paintWidget = nullptr;
+    
+    GraphicsViewEditTarget m_graphicsViewEditTarget = GraphicsViewEditTarget::Shape;
+    bool m_isSilhouetteImageObsolete = false;
+    SilhouetteImageGenerator *m_silhouetteImageGenerator = nullptr;
+    
+    std::map<QKeySequence, QShortcut *> m_shortcutMap;
 public:
     static int m_autoRecovered;
 };

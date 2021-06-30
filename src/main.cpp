@@ -11,6 +11,7 @@
 #include "documentwindow.h"
 #include "theme.h"
 #include "version.h"
+#include "document.h"
 
 int main(int argc, char ** argv)
 {
@@ -58,7 +59,7 @@ int main(int argc, char ** argv)
     font.setBold(false);
     QApplication::setFont(font);
     
-    Theme::initAwsomeBaseSizes();
+    Theme::initAwsome();
     
     DocumentWindow *firstWindow = DocumentWindow::createDocumentWindow();
     
@@ -66,6 +67,16 @@ int main(int argc, char ** argv)
     
     QStringList openFileList;
     QStringList waitingExportList;
+    
+    struct RenderOptions
+    {
+        bool enableWireframe = true;
+        QVector3D rotation = QVector3D(ModelWidget::m_defaultXRotation,
+            ModelWidget::m_defaultYRotation,
+            ModelWidget::m_defaultZRotation);
+        QVector3D camera = ModelWidget::m_defaultEyePosition;
+    };
+    RenderOptions renderOptions;
     for (int i = 1; i < argc; ++i) {
         if ('-' == argv[i][0]) {
             if (0 == strcmp(argv[i], "-output") ||
@@ -74,12 +85,37 @@ int main(int argc, char ** argv)
                 if (i < argc)
                     waitingExportList.append(argv[i]);
                 continue;
+            } else if (0 == strcmp(argv[i], "-wireframe")) {
+                ++i;
+                if (i < argc)
+                    renderOptions.enableWireframe = isTrueValueString(QString(argv[i]));
+                continue;
+            } else if (0 == strcmp(argv[i], "-rotate")) {
+                ++i;
+                if (i < argc) {
+                    auto tokens = QString(argv[i]).split(",");
+                    if (3 == tokens.size()) {
+                        renderOptions.rotation = QVector3D(tokens[0].toFloat(), 
+                            tokens[1].toFloat(), tokens[2].toFloat());
+                    }
+                }
+                continue;
+            } else if (0 == strcmp(argv[i], "-camera")) {
+                ++i;
+                if (i < argc) {
+                    auto tokens = QString(argv[i]).split(",");
+                    if (3 == tokens.size()) {
+                        renderOptions.camera = QVector3D(tokens[0].toFloat(), 
+                            tokens[1].toFloat(), tokens[2].toFloat());
+                    }
+                }
+                continue;
             }
             qDebug() << "Unknown option:" << argv[i];
             continue;
         }
         QString arg = argv[i];
-        if (arg.endsWith(".ds3")) {
+        if (arg.endsWith(".ds3") || arg.endsWith(".xml")) {
             openFileList.append(arg);
             continue;
         }
@@ -97,6 +133,15 @@ int main(int argc, char ** argv)
                 openFileList.size() == 1) {
             totalExportFileNum = openFileList.size() * waitingExportList.size();
             for (int i = 0; i < openFileList.size(); ++i) {
+                
+                ModelWidget *modelWidget = windowList[i]->modelWidget();
+                modelWidget->setXRotation(renderOptions.rotation.x() * 16);
+                modelWidget->setYRotation(renderOptions.rotation.y() * 16);
+                modelWidget->setZRotation(renderOptions.rotation.z() * 16);
+                modelWidget->setEyePosition(renderOptions.camera);
+                if (!renderOptions.enableWireframe)
+                    modelWidget->toggleWireframe();
+                
                 QObject::connect(windowList[i], &DocumentWindow::waitingExportFinished, &app, [&](const QString &filename, bool isSuccessful) {
                     qDebug() << "Export to" << filename << (isSuccessful ? "isSuccessful" : "failed");
                     ++finishedExportFileNum;
